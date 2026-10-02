@@ -1,0 +1,15 @@
+VỊT TRÊN AO SEN — các lớp đã tách tự động
+Mỗi file PNG có kích thước 1080 x 1620 (đúng khung ảnh gốc), nền trong suốt, chồng lên nhau đúng vị trí.
+
+Thứ tự xếp từ dưới lên trên:
+  00_nuoc_sach.png      nền nước đã xoá lá, vịt, sóng và giọt nước (phần bị che được tự điền lại)
+  01_song_nuoc.png      các nét sóng trắng quanh lá và vịt (tách nền, giữ độ trong suốt)
+  02_la_sen_1..7.png    7 lá sen, kèm cuống
+  03_vit_1..2.png       2 thân vịt
+  04_chan_vit_*.png     chân vịt: "trong" là chân nhìn xuyên qua thân, "ngoai" là chân thò ra ngoài thân
+  05_giot_nuoc.png      44 giọt nước nhỏ gộp trong một lớp
+
+Lưu ý:
+- Phần lá/cuống bị khung ảnh cắt vẫn bị cắt ở đây; bản HTML tự kéo dài phần này ra ngoài khung để xoay góc nhìn không lộ khoảng trống.
+- Đường viền do máy tự cắt nên có thể cần chỉnh tay vài chỗ (mép lá sát nhau, chân vịt).
+- Ảnh gốc xếp lại từ các lớp này lệch trung bình khoảng 3/255 mức màu so với ảnh gốc.
