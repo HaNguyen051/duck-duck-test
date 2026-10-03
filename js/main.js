@@ -1,28 +1,17 @@
-// Khởi động trang: phím tắt cho ô tìm kiếm và ao vịt tràn màn hình (nếu máy hỗ trợ WebGL).
-// File này được nạp từ đoạn script cuối index.html, chỉ khi trang mở qua http(s).
+// Khởi động ao vịt tràn màn hình. File này được nạp từ đoạn script cuối index.html,
+// chỉ khi trang mở qua http(s) — vì manifest và pixel ảnh đều bị chặn trên file://.
 
 const params = new URLSearchParams(location.search);
-const input = document.getElementById('q');
 const pondEl = document.getElementById('pond');
 const canvas = document.getElementById('pond-gl');
 
-// "/" đưa con trỏ vào ô tìm kiếm (trừ khi đang gõ ở ô khác)
-document.addEventListener('keydown', (e) => {
-  if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
-  const tag = document.activeElement?.tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) return;
-  e.preventDefault();
-  input.focus();
-  input.select();
-});
-
 function fallback(reason) {
   document.body.classList.add('nogl');
-  if (reason) console.warn('[Ao Vịt] Hiển thị ảnh tĩnh:', reason);
+  if (reason) console.warn('[Ao Vịt] Không dựng được cảnh 3D:', reason);
 }
 
 async function boot() {
-  if (params.has('static') || params.has('nogl')) return fallback(params.has('nogl') ? 'nogl' : '');
+  if (params.has('static') || params.has('nogl')) return fallback('');
   try {
     const [{ Pond }, { PondInput }] = await Promise.all([
       import('./pond/scene.js'),

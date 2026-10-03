@@ -1,5 +1,5 @@
 // Dựng cảnh ao vịt tràn màn hình: renderer, camera chiếu lệch tâm, vòng lặp.
-// Khung nhìn (toạ độ ảnh) tính theo cỡ màn hình (config.js → computeView); đổi cỡ thì dựng lại cảnh.
+// Khung nhìn (toạ độ ảnh) phủ kín màn hình theo kiểu cover; đổi cỡ màn hình thì dựng lại cảnh.
 import * as THREE from 'three';
 import { CAMERA, SIM, Z, AMBIENT_GAIN, LAYOUT, computeView } from './config.js';
 import { prepareAssets, buildWater, makeTexture } from './assets.js';
@@ -11,19 +11,7 @@ import { Drops } from './drops.js';
 
 const rand = (a, b) => a + Math.random() * (b - a);
 
-// Hình bờ ao lấy từ chính mặt nạ CSS (--pond-mask trong css/style.css, khác nhau cho màn ngang / dọc).
-function readPondMask(el) {
-  const raw = getComputedStyle(el).getPropertyValue('--pond-mask');
-  const m = raw.match(/url\(\s*(["'])data:image\/svg\+xml,(.*?)\1\s*\)/);
-  const svg = m && new DOMParser().parseFromString(decodeURIComponent(m[2]), 'image/svg+xml');
-  const d = svg?.getElementById('pond')?.getAttribute('d');
-  const vb = svg?.documentElement.getAttribute('viewBox')?.trim().split(/[\s,]+/).map(Number);
-  if (!d || !vb || vb.length !== 4) throw new Error('Không đọc được hình bờ ao từ --pond-mask');
-  return { path: new Path2D(d), w: vb[2], h: vb[3] };
-}
-
 export class Pond {
-  // el: khung .pond (tràn màn hình), canvas: canvas WebGL bên trong
   static async create(el, canvas, opts = {}) {
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
     const assets = await prepareAssets();
@@ -41,14 +29,13 @@ export class Pond {
     this.pathCtx = document.createElement('canvas').getContext('2d');
     this.ambGain = (this.reduceMotion ? 0.35 : 1) * AMBIENT_GAIN;
 
-    renderer.setClearColor(0x79baff, 1);
+    renderer.setClearColor(0x1d4e86, 1);
     this.camera = new THREE.PerspectiveCamera();
     this.cam = { x: 0, y: 0, tx: 0, ty: 0 };
     this.lastInput = -100;
     this.t = 0;
     this.acc = 0;
     this.nextDrop = rand(2, 4);
-    // ao tràn màn hình nên giới hạn độ phân giải ở 1,5× cho nhẹ GPU
     this.pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
     this.perf = { frames: 0, time: 0 };
     this.place = this.place.bind(this);
@@ -77,17 +64,15 @@ export class Pond {
     this.world = world;
     this.CX = view.x + view.w / 2;
     this.CY = view.y + view.h / 2;
-    this.mask = readPondMask(this.el);
     this.scene = new THREE.Scene();
 
     const sim = (this.sim = new WaterSim(world, cellFor(world, view.s)));
-    const mask = this.mask;
+    // mép vùng tương tác lấy từ layer "interactive water" trong file AI
+    const ip = this.assets.interactive.path;
     sim.setShore((g) => {
-      // toạ độ viewBox của mặt nạ → toạ độ lưới sóng
-      g.setTransform(view.w / (mask.w * sim.cell), 0, 0, view.h / (mask.h * sim.cell), (view.x - world.x) / sim.cell, (view.y - world.y) / sim.cell);
-      g.fill(mask.path);
+      g.setTransform(1 / sim.cell, 0, 0, 1 / sim.cell, -world.x / sim.cell, -world.y / sim.cell);
+      g.fill(ip);
     });
-    this.assets.ducks.forEach((d) => sim.addSolid(d.body));
 
     const water = buildWater(this.assets, world);
     this.waterTex = makeTexture(water.canvas);
@@ -96,10 +81,14 @@ export class Pond {
     this.scene.add(this.water.mesh);
 
     const place = this.place, scene = this.scene;
-    this.ducks = new Ducks({ ducks: this.assets.ducks, scene, place, ambGain: this.ambGain, reduceMotion: this.reduceMotion });
-    this.leaves = new Leaves({ templates: this.assets.templates, ducks: this.assets.ducks, scene, place, view });
-    const floating = this.assets.drops.filter((d) => d.cx > world.x && d.cx < world.x + world.w && d.cy > world.y && d.cy < world.y + world.h);
-    this.drops = new Drops({ floating, splash: this.assets.splash, scene, place, reduceMotion: this.reduceMotion });
+    this.leaves = new Leaves({ templates: this.assets.leaves, scene, place, view });
+    this.ducks = new Ducks({
+      scene, view, world, sim, ambGain: this.ambGain, reduceMotion: this.reduceMotion,
+      squash: this.assets.duck.squash, centre: [this.CX, this.CY],
+    });
+    const inWorld = (d) => d.cx > world.x && d.cx < world.x + world.w && d.cy > world.y && d.cy < world.y + world.h;
+    const splash = [...this.assets.drops].sort((a, b) => b.area - a.area).slice(0, 10);
+    this.drops = new Drops({ floating: this.assets.drops.filter(inWorld), splash, scene, place, reduceMotion: this.reduceMotion });
 
     if (this.opts.debug) this.setupDebug();
     this.renderer.setPixelRatio(this.pixelRatio);
@@ -107,9 +96,7 @@ export class Pond {
   }
 
   teardown() {
-    this.scene.traverse((o) => {
-      if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); }
-    });
+    this.scene.traverse((o) => { if (o.isMesh) o.material.dispose(); });
     this.waterTex.dispose();
     this.sim.dispose();
     if (this.debug) { this.debug.remove(); this.debug = null; }
@@ -136,8 +123,8 @@ export class Pond {
   }
 
   /* -------------------------------------------------------------- placement */
-  // Đặt một sprite theo toạ độ ảnh gốc ở độ cao z. Kích thước bù theo zScale để khi camera ở giữa,
-  // mọi lớp khớp đúng ảnh gốc; khi camera lệch, lớp càng cao trượt càng nhiều.
+  // Đặt một sprite theo toạ độ ảnh ở độ cao z. Kích thước bù theo zScale để khi camera ở giữa,
+  // mọi lớp khớp đúng ảnh gốc; camera lệch thì lớp càng cao trượt càng nhiều.
   place(mesh, ix, iy, z, angle, sx, sy, zScale = z) {
     const D = CAMERA.D, kp = (D - z) / D, ks = (D - zScale) / D;
     mesh.position.set((ix - this.CX) * kp, -(iy - this.CY) * kp, z);
@@ -145,7 +132,7 @@ export class Pond {
     mesh.scale.set(sx * ks, sy * ks, 1);
   }
 
-  // Điểm trên màn hình → toạ độ ảnh gốc trên mặt phẳng độ cao z.
+  // Điểm trên màn hình → toạ độ ảnh trên mặt phẳng độ cao z.
   imageAt(clientX, clientY, z = 0) {
     const r = this.canvas.getBoundingClientRect(), V = this.view;
     const u = (clientX - r.left) / r.width, v = (clientY - r.top) / r.height;
@@ -153,10 +140,7 @@ export class Pond {
     return { ix: V.x + u * V.w + this.cam.x * f, iy: V.y + v * V.h - this.cam.y * f, u, v };
   }
 
-  inPond(ix, iy) {
-    const V = this.view, m = this.mask;
-    return this.pathCtx.isPointInPath(m.path, ((ix - V.x) / V.w) * m.w, ((iy - V.y) / V.h) * m.h);
-  }
+  inPond(ix, iy) { return this.pathCtx.isPointInPath(this.assets.interactive.path, ix, iy); }
 
   pick(clientX, clientY) {
     const qd = this.imageAt(clientX, clientY, Z.duck);
@@ -169,7 +153,6 @@ export class Pond {
   }
 
   /* -------------------------------------------------------------- actions */
-  // Cỡ sóng do ngón tay / chuột tạo ra tính theo px màn hình (không teo lại trên điện thoại).
   screenPx(px) { return px / this.view.s; }
 
   tilt(nx, ny) {
@@ -182,7 +165,7 @@ export class Pond {
 
   drop(ix, iy) {
     const g = this.reduceMotion ? 0.6 : 1;
-    this.sim.disturb(ix, iy, Math.max(14, this.screenPx(17)), -14 * g);
+    this.sim.disturb(ix, iy, Math.max(14, this.screenPx(17)), -7.5 * g);
     this.drops.burst(ix, iy, 5, g, Math.max(1, Math.sqrt(1 / this.view.s)));
     this.touch();
   }
@@ -192,19 +175,12 @@ export class Pond {
     const dx = b.ix - a.ix, dy = b.iy - a.iy, dist = Math.hypot(dx, dy);
     if (dist < 1) return;
     const speed = (dist * this.view.s) / Math.max(dt, 1 / 120);
-    const amt = Math.min(4, Math.max(0.8, speed * 0.005)) * (this.reduceMotion ? 0.6 : 1);
+    const amt = Math.min(2.2, Math.max(0.5, speed * 0.003)) * (this.reduceMotion ? 0.6 : 1);
     const step = this.screenPx(9), n = Math.ceil(dist / step), r = Math.max(9, this.screenPx(11));
     for (let i = 1; i <= n; i++) {
       const x = a.ix + (dx * i) / n, y = a.iy + (dy * i) / n;
       if (this.inPond(x, y)) this.sim.disturb(x, y, r, -amt);
     }
-    this.touch();
-  }
-
-  pokeDuck(k, ix) {
-    this.ducks.poke(k, ix, this.sim);
-    const d = this.ducks.items[k].d;
-    this.drops.burst(d.center.x, d.center.y + d.radii.y * 0.8, 4, 0.8, Math.max(1, Math.sqrt(1 / this.view.s)));
     this.touch();
   }
 
@@ -224,7 +200,6 @@ export class Pond {
       ((-W / 2 - c.x) * near) / D, ((W / 2 - c.x) * near) / D,
       ((H / 2 - c.y) * near) / D, ((-H / 2 - c.y) * near) / D, near, far);
     this.camera.projectionMatrixInverse.copy(this.camera.projectionMatrix).invert();
-    this.water.uniforms.uCam.value.set(c.x, c.y, D);
   }
 
   ambientDrops(dt) {
@@ -236,7 +211,7 @@ export class Pond {
     for (let i = 0; i < 8; i++) {
       const x = rand(V.x + V.w * 0.05, V.x + V.w * 0.95), y = rand(V.y + V.h * 0.05, V.y + V.h * 0.95);
       if (this.inPond(x, y) && this.ducks.pick(x, y) < 0 && !this.leaves.pick(x, y)) {
-        this.sim.disturb(x, y, Math.max(5, this.screenPx(6)), -1.4);
+        this.sim.disturb(x, y, Math.max(5, this.screenPx(6)), -0.85);
         return;
       }
     }
@@ -260,8 +235,9 @@ export class Pond {
       this.ambientDrops(dt);
     }
     this.ducks.update(t, dt, this.sim);
+    this.leaves.avoidDucks(this.ducks.bodies());
     this.drops.update(t, dt, this.sim);
-    this.leaves.sync(this.sim);
+    this.leaves.sync();
     this.sim.upload();
     this.updateCamera(dt);
     this.water.uniforms.uTime.value = t;
@@ -271,10 +247,8 @@ export class Pond {
     if (!this.live) {
       this.live = true;
       this.el.classList.add('live');
-      setTimeout(() => this.el.classList.add('settled'), 900);
-      if (this.opts.onLive) this.opts.onLive();
+      this.opts.onLive?.();
     }
-    // tự giảm độ phân giải khi máy chậm
     const p = this.perf;
     p.frames++; p.time += raw;
     if (p.frames >= 90) {
@@ -293,7 +267,6 @@ export class Pond {
     const c = document.createElement('canvas'), V = this.view, W = this.world;
     c.className = 'pond-debug';
     c.width = this.sim.cols; c.height = this.sim.rows;
-    // lưới phủ vùng world (rộng hơn khung nhìn một chút)
     Object.assign(c.style, {
       left: `${((W.x - V.x) / V.w) * 100}%`, top: `${((W.y - V.y) / V.h) * 100}%`,
       width: `${((this.sim.cols * this.sim.cell) / V.w) * 100}%`, height: `${((this.sim.rows * this.sim.cell) / V.h) * 100}%`,

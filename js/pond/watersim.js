@@ -1,5 +1,5 @@
-// Mô phỏng sóng trên lưới chiều cao (CPU). Sóng lan truyền, chồng lên nhau, dội lại quanh vịt
-// và tắt dần ở bờ ao. Toạ độ vào/ra là pixel ảnh gốc; lưới phủ vùng `world`, mỗi ô `cell` px ảnh.
+// Mô phỏng sóng trên lưới chiều cao (CPU). Sóng lan truyền, chồng lên nhau, dội lại quanh vùng
+// tiếp nước của vịt và tắt dần ở mép vùng tương tác. Toạ độ vào/ra là px ảnh; lưới phủ `world`.
 import * as THREE from 'three';
 import { SIM } from './config.js';
 
@@ -33,7 +33,7 @@ export class WaterSim {
     this.texture.needsUpdate = true;
   }
 
-  // Bờ ao: draw(ctx) vẽ hình ao lên canvas theo toạ độ lưới (cột, hàng). Trong ao tắt dần chậm, ngoài ao tắt rất nhanh.
+  // Mép vùng tương tác: draw(ctx) vẽ hình vùng nước theo toạ độ lưới. Trong vùng tắt dần chậm, ngoài tắt rất nhanh.
   setShore(draw) {
     const { cols, rows } = this;
     const c = document.createElement('canvas');
@@ -49,19 +49,57 @@ export class WaterSim {
     }
   }
 
-  // Vật chắn sóng cố định (thân vịt): layer = { rect, alpha } theo toạ độ ảnh.
-  addSolid(layer) {
-    const { cols, rows, cell, ox, oy } = this, { rect, alpha } = layer;
-    const x0 = Math.max(1, Math.floor((rect.x - ox) / cell)), x1 = Math.min(cols - 2, Math.ceil((rect.x + rect.w - ox) / cell));
-    const y0 = Math.max(1, Math.floor((rect.y - oy) / cell)), y1 = Math.min(rows - 2, Math.ceil((rect.y + rect.h - oy) / cell));
-    for (let gy = y0; gy <= y1; gy++) for (let gx = x0; gx <= x1; gx++) {
-      let hits = 0;
-      for (const [px, py] of [[0.5, 0.5], [0.15, 0.15], [0.85, 0.15], [0.15, 0.85], [0.85, 0.85]]) {
-        const lx = Math.floor(ox + (gx + px) * cell - rect.x), ly = Math.floor(oy + (gy + py) * cell - rect.y);
-        if (lx >= 0 && ly >= 0 && lx < rect.w && ly < rect.h && alpha[ly * rect.w + lx] > 127) hits++;
+  /* ---- vật chắn động: vịt bơi nên phải dựng lại mỗi khung hình ---- */
+  clearSolid() { this.solid.fill(0); }
+
+  // mask: { w, h, data, cell, x, y } theo hệ pixel của ảnh khung vịt;
+  // (ox, oy) là góc trên trái của ảnh khung đó trong toạ độ ảnh, `scale` là cỡ vẽ của khung.
+  stampSolid(mask, ox, oy, scale = 1) {
+    if (!mask) return;
+    const { cols, rows, cell } = this;
+    const mc = mask.cell * scale;                 // một ô mặt nạ chiếm ngần này px ảnh
+    const x0 = ox + mask.x * scale, y0 = oy + mask.y * scale;
+    const gx0 = Math.max(1, Math.floor((x0 - this.ox) / cell));
+    const gx1 = Math.min(cols - 2, Math.ceil((x0 + mask.w * mc - this.ox) / cell));
+    const gy0 = Math.max(1, Math.floor((y0 - this.oy) / cell));
+    const gy1 = Math.min(rows - 2, Math.ceil((y0 + mask.h * mc - this.oy) / cell));
+    for (let gy = gy0; gy <= gy1; gy++) {
+      const iy = ((this.oy + (gy + 0.5) * cell - y0) / mc) | 0;
+      if (iy < 0 || iy >= mask.h) continue;
+      for (let gx = gx0; gx <= gx1; gx++) {
+        const ix = ((this.ox + (gx + 0.5) * cell - x0) / mc) | 0;
+        if (ix < 0 || ix >= mask.w) continue;
+        if (mask.data[iy * mask.w + ix]) this.solid[gy * cols + gx] = 1;
       }
-      if (hits >= 3) this.solid[gy * cols + gx] = 1;
     }
+  }
+
+  // Vùng tiếp nước của vịt 3D: mặt cắt thân ở mực nước là một hình elip nằm trên mặt nước,
+  // chiếu lên màn hình thì bị ép dẹt theo chiều dọc và xoay theo hướng bơi.
+  // (cx, cy) tâm theo toạ độ ảnh; a dọc theo thân, b ngang thân; head = hướng bơi; sq = độ ép dẹt.
+  stampEllipse(cx, cy, a, b, head, sq) {
+    const { cols, rows, cell } = this;
+    const ch = Math.cos(head), sh = Math.sin(head);
+    const R = Math.max(a, b) + cell;
+    const gx0 = Math.max(1, Math.floor((cx - R - this.ox) / cell));
+    const gx1 = Math.min(cols - 2, Math.ceil((cx + R - this.ox) / cell));
+    const gy0 = Math.max(1, Math.floor((cy - R * sq - this.oy) / cell));
+    const gy1 = Math.min(rows - 2, Math.ceil((cy + R * sq - this.oy) / cell));
+    for (let gy = gy0; gy <= gy1; gy++) {
+      const dy = (this.oy + (gy + 0.5) * cell - cy) / sq; // bỏ ép dẹt để về mặt phẳng nước
+      for (let gx = gx0; gx <= gx1; gx++) {
+        const dx = this.ox + (gx + 0.5) * cell - cx;
+        const u = dx * ch + dy * sh, v = -dx * sh + dy * ch; // xoay về hệ của con vịt
+        if ((u * u) / (a * a) + (v * v) / (b * b) <= 1) this.solid[gy * cols + gx] = 1;
+      }
+    }
+  }
+
+  // Điểm có nằm trong vùng chắn không (dùng để lá không trôi xuyên qua vịt).
+  solidAt(ix, iy) {
+    const gx = Math.round((ix - this.ox) / this.cell - 0.5), gy = Math.round((iy - this.oy) / this.cell - 0.5);
+    if (gx < 0 || gy < 0 || gx >= this.cols || gy >= this.rows) return false;
+    return this.solid[gy * this.cols + gx] === 1;
   }
 
   toGrid(ix, iy) {
@@ -86,7 +124,7 @@ export class WaterSim {
     this.prev = cur;
   }
 
-  // Thả một "cú chạm" hình chuông (bán kính px ảnh). amount < 0 là lõm xuống (giọt rơi), > 0 là nhô lên.
+  // Thả một "cú chạm" hình chuông (bán kính px ảnh). amount < 0 là lõm xuống, > 0 là nhô lên.
   disturb(ix, iy, radius, amount) {
     const { cols, rows, cur, solid } = this;
     const [gx, gy] = this.toGrid(ix, iy);
@@ -102,7 +140,7 @@ export class WaterSim {
     }
   }
 
-  // Chiều cao và độ dốc (chiều cao trên pixel ảnh) tại một điểm.
+  // Chiều cao và độ dốc (chiều cao trên px ảnh) tại một điểm.
   sample(ix, iy, out) {
     const { cols, rows, cur, cell } = this;
     let [fx, fy] = this.toGrid(ix, iy);
@@ -122,7 +160,5 @@ export class WaterSim {
     this.texture.needsUpdate = true;
   }
 
-  dispose() {
-    this.texture.dispose();
-  }
+  dispose() { this.texture.dispose(); }
 }

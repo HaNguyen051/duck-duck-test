@@ -1,4 +1,4 @@
-// Chuột / cảm ứng: di chuột để nghiêng, nhấn lá để giữ-kéo-ném, chạm vịt để vịt nhún,
+// Chuột / cảm ứng: di chuột để nghiêng cảnh, kéo lá, kéo vịt (vịt quay đầu theo hướng kéo),
 // chạm hoặc vuốt mặt nước để tạo sóng.
 import { Z, LEAVES } from './config.js';
 
@@ -8,7 +8,7 @@ export class PondInput {
   constructor(pond, el) {
     this.pond = pond;
     this.el = el;
-    this.active = null; // { id, mode, leaf?, last, samples }
+    this.active = null; // { id, mode, leaf?|duck?, last, samples }
     this.hoverQueued = false;
     this.hoverEvent = null;
 
@@ -47,7 +47,7 @@ export class PondInput {
       const q = this.pond.imageAt(ev.clientX, ev.clientY, 0);
       if (!this.pond.inPond(q.ix, q.iy)) { this.setCursor(''); return; }
       const hit = this.pond.pick(ev.clientX, ev.clientY);
-      this.setCursor(hit.type === 'leaf' ? 'grab' : hit.type === 'duck' ? 'pointer' : '');
+      this.setCursor(hit.type === 'water' ? '' : 'grab');
     });
   }
 
@@ -55,18 +55,18 @@ export class PondInput {
     if (this.active || (e.button !== undefined && e.button > 0)) return;
     const q0 = this.pond.imageAt(e.clientX, e.clientY, 0);
     if (!this.pond.inPond(q0.ix, q0.iy)) return;
-    // chặn sự kiện chuột tương thích: ô tìm kiếm giữ được focus, không bôi đen chữ
     e.preventDefault();
     try { this.el.setPointerCapture(e.pointerId); } catch { /* bỏ qua */ }
     const hit = this.pond.pick(e.clientX, e.clientY);
     const now = performance.now();
-    if (hit.type === 'leaf') {
+    if (hit.type === 'duck') {
+      this.pond.ducks.grab(hit.index, hit.ix, hit.iy);
+      this.active = { id: e.pointerId, mode: 'duck', duck: hit.index };
+      this.setCursor('grabbing');
+    } else if (hit.type === 'leaf') {
       this.pond.leaves.grab(hit.leaf, hit.ix, hit.iy, this.pond.sim);
       this.active = { id: e.pointerId, mode: 'leaf', leaf: hit.leaf, samples: [{ t: now, x: hit.ix, y: hit.iy }] };
       this.setCursor('grabbing');
-    } else if (hit.type === 'duck') {
-      this.pond.pokeDuck(hit.index, hit.ix);
-      this.active = { id: e.pointerId, mode: 'none' };
     } else {
       this.pond.drop(q0.ix, q0.iy);
       this.active = { id: e.pointerId, mode: 'stir', last: { ...q0, t: now } };
@@ -78,7 +78,11 @@ export class PondInput {
     const a = this.active;
     if (!a || a.id !== e.pointerId) return;
     const now = performance.now();
-    if (a.mode === 'leaf') {
+    if (a.mode === 'duck') {
+      const q = this.pond.imageAt(e.clientX, e.clientY, Z.duck);
+      this.pond.ducks.moveHeld(a.duck, q.ix, q.iy);
+      this.pond.touch();
+    } else if (a.mode === 'leaf') {
       const q = this.pond.imageAt(e.clientX, e.clientY, Z.leaf + LEAVES.lift);
       this.pond.leaves.moveHeld(a.leaf, q.ix, q.iy);
       a.samples.push({ t: now, x: q.ix, y: q.iy });
@@ -95,7 +99,9 @@ export class PondInput {
     const a = this.active;
     if (!a || a.id !== e.pointerId) return;
     this.active = null;
-    if (a.mode === 'leaf') {
+    if (a.mode === 'duck') {
+      this.pond.ducks.release(a.duck);
+    } else if (a.mode === 'leaf') {
       const s = a.samples, first = s[0], last = s[s.length - 1];
       const dt = (last.t - first.t) / 1000;
       const fresh = performance.now() - last.t < 80;
@@ -103,7 +109,7 @@ export class PondInput {
       const vy = dt > 0.01 && fresh ? (last.y - first.y) / dt : 0;
       this.pond.leaves.release(a.leaf, vx, vy);
     }
-    this.setCursor(e.pointerType === 'mouse' && a.mode === 'leaf' ? 'grab' : '');
+    this.setCursor(e.pointerType === 'mouse' && a.mode !== 'stir' ? 'grab' : '');
     try { this.el.releasePointerCapture(e.pointerId); } catch { /* đã nhả */ }
   }
 }

@@ -1,4 +1,4 @@
-// Giọt nước: lớp giọt lơ lửng (tách từ 05_giot_nuoc.png) và tia nước bắn lên khi chạm mặt ao.
+// Giọt nước: lớp giọt lơ lửng (tách từ lớp "giot nuoc") và tia nước bắn lên khi chạm mặt ao.
 import * as THREE from 'three';
 import { Z } from './config.js';
 import { textureFrom, spriteMaterial, setSpriteColor } from './assets.js';
@@ -12,16 +12,17 @@ export class Drops {
     this.place = place;
     this.reduceMotion = reduceMotion;
     this.floating = floating.map((d) => {
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(d.rect.w, d.rect.h), spriteMaterial(textureFrom(d.canvas)));
+      d.geo ||= new THREE.PlaneGeometry(d.w, d.h);
+      const m = new THREE.Mesh(d.geo, spriteMaterial(textureFrom(d.canvas)));
       m.renderOrder = 20000;
       m.frustumCulled = false;
       scene.add(m);
       return { m, x: d.cx, y: d.cy, z: rand(Z.dropMin, Z.dropMax), ph: rand(0, 6.28) };
     });
-    const tex = splash.map(textureFrom);
     this.pool = Array.from({ length: POOL }, (_, i) => {
-      const t = tex[i % tex.length], img = t.image;
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(img.width, img.height), spriteMaterial(t));
+      const d = splash[i % splash.length];
+      d.geo ||= new THREE.PlaneGeometry(d.w, d.h);
+      const m = new THREE.Mesh(d.geo, spriteMaterial(textureFrom(d.canvas)));
       m.renderOrder = 30000;
       m.frustumCulled = false;
       m.visible = false;
@@ -30,7 +31,7 @@ export class Drops {
     });
   }
 
-  // spread > 1 khi cảnh bị thu nhỏ (điện thoại): giọt bay xa và to hơn theo toạ độ ảnh để vẫn thấy rõ.
+  // spread > 1 khi cảnh bị thu nhỏ: giọt bay xa và to hơn theo toạ độ ảnh để vẫn thấy rõ.
   burst(ix, iy, count, power = 1, spread = 1) {
     if (this.reduceMotion) count = Math.ceil(count / 2);
     for (let i = 0; i < count; i++) {

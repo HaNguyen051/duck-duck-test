@@ -1,0 +1,45 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Soi con vịt</title>
+<style>
+ html,body{margin:0;height:100%;background:#2f6ea8;color:#fff;font:13px/1.4 system-ui,sans-serif}
+ canvas{display:block;width:100vw;height:auto}
+ p{position:fixed;left:12px;bottom:10px;margin:0;opacity:.75}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.186.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.186.0/examples/jsm/"}}</script>
+</head><body>
+<canvas id="c"></canvas>
+<p>Soi con vịt 3D ở 8 hướng quay. Vạch trắng là mặt nước. Tỉ lệ chỉnh ở <code>DUCK3D</code> trong js/pond/config.js, dáng ở <code>PROFILE</code> trong js/pond/duck3d.js.</p>
+<script type="module">
+import * as THREE from 'three';
+import { buildDuckGeometry, duckMaterial } from './js/pond/duck3d.js';
+const N = 8, W = 1600, H = 820;
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+r.setPixelRatio(2); r.setSize(W, H, false); r.setClearColor(0x2f6ea8, 1);
+const sc = new THREE.Scene();
+const cam = new THREE.OrthographicCamera(-W / 2, W / 2, H / 2, -H / 2, -5000, 5000);
+const geo = buildDuckGeometry();
+const squash = 0.39, S = 0.42, cols = 4, rows = Math.ceil(N / cols);
+const mats = [];
+for (let i = 0; i < N; i++) {
+  const mat = duckMaterial();
+  mat.uniforms.uWaterY.value = 0;
+  mat.uniforms.uRefr.value = 0;
+  mat.uniforms.uCentre.value.set(0, 0);
+  mats.push(mat);
+  const yaw = new THREE.Group(); yaw.add(new THREE.Mesh(geo, mat));
+  yaw.rotation.y = (i / N) * Math.PI * 2;
+  const tilt = new THREE.Group(); tilt.add(yaw); tilt.rotation.x = -Math.asin(squash);
+  const root = new THREE.Group(); root.add(tilt); root.scale.setScalar(S);
+  root.position.set(-W / 2 + W / (cols * 2) + (i % cols) * (W / cols),
+                    H / 2 - H / (rows * 2) - Math.floor(i / cols) * (H / rows), 0);
+  sc.add(root);
+  // vạch mặt nước cho từng con
+  const line = new THREE.Mesh(new THREE.PlaneGeometry(W / cols - 20, 1.5),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 }));
+  line.position.copy(root.position); line.position.z = 900;
+  sc.add(line);
+}
+r.setAnimationLoop((t) => {
+  for (const m of mats) m.uniforms.uTime.value = t / 1000;
+  r.render(sc, cam);
+});
+</script></body></html>
