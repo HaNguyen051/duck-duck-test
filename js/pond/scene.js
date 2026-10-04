@@ -1,7 +1,8 @@
 // Dựng cảnh ao vịt tràn màn hình: renderer, camera chiếu lệch tâm, vòng lặp.
 // Khung nhìn (toạ độ ảnh) phủ kín màn hình theo kiểu cover; đổi cỡ màn hình thì dựng lại cảnh.
 import * as THREE from 'three';
-import { CAMERA, SIM, Z, AMBIENT_GAIN, LAYOUT, computeView } from './config.js';
+import { CAMERA, SIM, Z, AMBIENT_GAIN, LAYOUT, PERSPECTIVE, computeView } from './config.js';
+import { Persp } from './persp.js';
 import { prepareAssets, buildWater, makeTexture } from './assets.js';
 import { WaterSim, cellFor } from './watersim.js';
 import { createWater } from './water.js';
@@ -66,13 +67,12 @@ export class Pond {
     this.CY = view.y + view.h / 2;
     this.scene = new THREE.Scene();
 
-    const sim = (this.sim = new WaterSim(world, cellFor(world, view.s)));
+    const sq = this.assets.duck.squash; // độ ép dẹt của mặt nước nhìn xiên, đo từ tranh
+    // phép chiếu ảnh ↔ mặt phẳng nước có phối cảnh: lưới sóng, vịt, lá cùng dùng
+    const persp = (this.persp = new Persp(view, sq, PERSPECTIVE.near, PERSPECTIVE.far));
+    const sim = (this.sim = new WaterSim(world, cellFor(world, view.s, persp), persp));
     // mép vùng tương tác lấy từ layer "interactive water" trong file AI
-    const ip = this.assets.interactive.path;
-    sim.setShore((g) => {
-      g.setTransform(1 / sim.cell, 0, 0, 1 / sim.cell, -world.x / sim.cell, -world.y / sim.cell);
-      g.fill(ip);
-    });
+    sim.setShore(this.assets.interactive.path, world);
 
     const water = buildWater(this.assets, world);
     this.waterTex = makeTexture(water.canvas);
@@ -81,10 +81,18 @@ export class Pond {
     this.scene.add(this.water.mesh);
 
     const place = this.place, scene = this.scene;
-    this.leaves = new Leaves({ templates: this.assets.leaves, scene, place, view });
+    this.leaves = new Leaves({
+      models: this.assets.leaves, scene, view, sim, persp, centre: [this.CX, this.CY], squash: sq,
+      ambGain: this.ambGain, reduceMotion: this.reduceMotion,
+    });
     this.ducks = new Ducks({
-      scene, view, world, sim, ambGain: this.ambGain, reduceMotion: this.reduceMotion,
-      squash: this.assets.duck.squash, centre: [this.CX, this.CY],
+      scene, view, world, sim, persp, ambGain: this.ambGain, reduceMotion: this.reduceMotion,
+      squash: this.assets.duck.squash, centre: [this.CX, this.CY], model: this.assets.duck.model,
+      // vịt rũ nước: bắn giọt quanh nó và gợn mặt nước
+      splash: (ix, iy, n) => {
+        this.drops.burst(ix, iy, n, 0.9, Math.max(1, Math.sqrt(1 / this.view.s)));
+        this.sim.disturb(ix, iy, Math.max(14, this.screenPx(16)), -1.4);
+      },
     });
     const inWorld = (d) => d.cx > world.x && d.cx < world.x + world.w && d.cy > world.y && d.cy < world.y + world.h;
     const splash = [...this.assets.drops].sort((a, b) => b.area - a.area).slice(0, 10);
@@ -97,6 +105,7 @@ export class Pond {
 
   teardown() {
     this.scene.traverse((o) => { if (o.isMesh) o.material.dispose(); });
+    this.water.mesh.geometry.dispose(); // mặt nước dựng mới mỗi lần; các hình học khác dùng lại
     this.waterTex.dispose();
     this.sim.dispose();
     if (this.debug) { this.debug.remove(); this.debug = null; }
@@ -162,6 +171,12 @@ export class Pond {
   }
 
   touch() { this.lastInput = this.t; }
+
+  // Con trỏ đang ở đâu trên mặt phẳng của vịt — để vịt ngó theo. Ghi kèm thời điểm để hết hạn.
+  pointerAt(clientX, clientY) {
+    const q = this.imageAt(clientX, clientY, Z.duck);
+    this.pointer = { ix: q.ix, iy: q.iy, t: this.t };
+  }
 
   drop(ix, iy) {
     const g = this.reduceMotion ? 0.6 : 1;
@@ -234,10 +249,11 @@ export class Pond {
       this.leaves.update(dt, t, this.sim);
       this.ambientDrops(dt);
     }
-    this.ducks.update(t, dt, this.sim);
+    this.ducks.update(t, dt, this.sim, this.pointer);
     this.leaves.avoidDucks(this.ducks.bodies());
     this.drops.update(t, dt, this.sim);
-    this.leaves.sync();
+    this.leaves.sync(t, dt, this.sim);
+    this.sortLayers();
     this.sim.upload();
     this.updateCamera(dt);
     this.water.uniforms.uTime.value = t;
@@ -262,15 +278,24 @@ export class Pond {
     }
   }
 
+  // Xếp lớp theo trục y như game 2D (Unity Y-sort), tính lại MỖI KHUNG HÌNH. Ta nhìn từ DƯỚI hồ lên,
+  // nên ngược với nhìn từ trên xuống: vật ở gần người xem hiện CAO hơn trên màn hình (toạ độ ảnh y nhỏ
+  // hơn) → vật có y màn hình cao hơn vẽ sau, đè lên vật thấp hơn — vịt và lá chung một danh sách. Vật
+  // đang được nhấc lên khỏi mặt nước luôn ở trên cùng. Giọt nước (renderOrder ≥ 20000) vẫn trên hết.
+  sortLayers() {
+    const all = [...this.ducks.drawables(), ...this.leaves.drawables()];
+    all.sort((a, b) => (a.lift - b.lift) || (b.y - a.y)); // y ảnh lớn (thấp trên màn hình) vẽ trước
+    all.forEach((d, i) => { d.mesh.renderOrder = 20 + i; });
+  }
+
   /* -------------------------------------------------------------- debug (?debug) */
+  // Lưới sóng nằm trên mặt phẳng phối cảnh, không còn khớp affine với ảnh: lớp debug chỉ là bản đồ lưới
+  // (toàn khung), không trùng vị trí trên màn hình.
   setupDebug() {
-    const c = document.createElement('canvas'), V = this.view, W = this.world;
+    const c = document.createElement('canvas');
     c.className = 'pond-debug';
     c.width = this.sim.cols; c.height = this.sim.rows;
-    Object.assign(c.style, {
-      left: `${((W.x - V.x) / V.w) * 100}%`, top: `${((W.y - V.y) / V.h) * 100}%`,
-      width: `${((this.sim.cols * this.sim.cell) / V.w) * 100}%`, height: `${((this.sim.rows * this.sim.cell) / V.h) * 100}%`,
-    });
+    Object.assign(c.style, { left: '0%', top: '0%', width: '100%', height: '100%' });
     this.el.appendChild(c);
     this.debug = c;
     this.debugCtx = c.getContext('2d');

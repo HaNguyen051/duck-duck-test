@@ -33,7 +33,10 @@ export class PondInput {
     const nx = clamp((e.clientX - (r.left + r.width / 2)) / (r.width * 0.75), -1, 1);
     const ny = clamp((e.clientY - (r.top + r.height / 2)) / (r.height * 1.1), -1, 1);
     this.pond.tilt(nx, ny);
-    if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) this.queueHover(e);
+    if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+      this.pond.pointerAt(e.clientX, e.clientY);
+      this.queueHover(e);
+    }
   }
 
   queueHover(e) {
@@ -59,6 +62,7 @@ export class PondInput {
     try { this.el.setPointerCapture(e.pointerId); } catch { /* bỏ qua */ }
     const hit = this.pond.pick(e.clientX, e.clientY);
     const now = performance.now();
+    this.pond.pointerAt(e.clientX, e.clientY);
     if (hit.type === 'duck') {
       this.pond.ducks.grab(hit.index, hit.ix, hit.iy);
       this.active = { id: e.pointerId, mode: 'duck', duck: hit.index };
@@ -78,6 +82,7 @@ export class PondInput {
     const a = this.active;
     if (!a || a.id !== e.pointerId) return;
     const now = performance.now();
+    this.pond.pointerAt(e.clientX, e.clientY);
     if (a.mode === 'duck') {
       const q = this.pond.imageAt(e.clientX, e.clientY, Z.duck);
       this.pond.ducks.moveHeld(a.duck, q.ix, q.iy);

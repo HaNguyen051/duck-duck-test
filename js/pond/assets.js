@@ -1,9 +1,10 @@
-// Nạp asset đã xuất từ duck-1.ai (images-duck-v2/manifest.json) và chuẩn bị texture.
-// prepareAssets chạy một lần lúc mở trang; buildWater dựng mặt nước nối dài cho từng khung nhìn.
+// Nạp asset: ảnh xuất từ duck-1.ai (images-duck-v2/manifest.json) cho mặt nước và giọt, model 3D cho
+// vịt và lá. prepareAssets chạy một lần lúc mở trang; buildWater dựng mặt nước nối dài cho từng khung nhìn.
 import * as THREE from 'three';
-import { IMG_DIR, MANIFEST, LEAVES } from './config.js';
+import { IMG_DIR, MANIFEST } from './config.js';
+import { loadDuckModel } from './duck3d.js';
+import { loadLeafModels } from './leaf3d.js';
 
-const GRID = 6;            // ô lưới thô (px ảnh) để phân tích mặt lá
 const REFRACT_MARGIN = 56; // lề quanh vùng nước để khúc xạ không lấy mẫu ra ngoài
 const SEAM_BLEND = 220;    // nước nối dài: hoà mép nối trong ngần này px ảnh
 const TILE_SHIFT = 130;    // mỗi bản lặp dịch dọc ngần này px ảnh
@@ -93,96 +94,6 @@ export function setSpriteColor(m, alpha, r = 1, g = r, b = r) {
   m.color.setRGB(r * alpha, g * alpha, b * alpha);
 }
 
-/* ------------------------------------------------------------------ leaf shape */
-// Lưới thô: tỉ lệ phủ alpha trong mỗi ô, 0..1.
-function coarseCoverage(alpha, w, h, cell) {
-  const cols = Math.ceil(w / cell), rows = Math.ceil(h / cell);
-  const cov = new Float32Array(cols * rows);
-  for (let y = 0; y < h; y++) {
-    const cy = (y / cell) | 0;
-    for (let x = 0; x < w; x++) if (alpha[y * w + x] > 127) cov[cy * cols + ((x / cell) | 0)] += 1;
-  }
-  const n = cell * cell;
-  for (let i = 0; i < cov.length; i++) cov[i] /= n;
-  return { cols, rows, cell, data: cov };
-}
-
-// Khoảng cách (theo ô) từ mỗi điểm phủ tới điểm trống gần nhất — chamfer hai lượt.
-function distanceInside(mask, cols, rows) {
-  const d = new Float32Array(cols * rows);
-  const BIG = 1e6, D1 = 1, D2 = Math.SQRT2;
-  for (let i = 0; i < d.length; i++) d[i] = mask[i] ? BIG : 0;
-  for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
-    const i = y * cols + x;
-    if (!d[i]) continue;
-    let v = d[i];
-    v = Math.min(v, x > 0 ? d[i - 1] + D1 : D1);
-    v = Math.min(v, y > 0 ? d[i - cols] + D1 : D1);
-    if (x > 0 && y > 0) v = Math.min(v, d[i - cols - 1] + D2);
-    if (x < cols - 1 && y > 0) v = Math.min(v, d[i - cols + 1] + D2);
-    d[i] = v;
-  }
-  for (let y = rows - 1; y >= 0; y--) for (let x = cols - 1; x >= 0; x--) {
-    const i = y * cols + x;
-    if (!d[i]) continue;
-    let v = d[i];
-    v = Math.min(v, x < cols - 1 ? d[i + 1] + D1 : D1);
-    v = Math.min(v, y < rows - 1 ? d[i + cols] + D1 : D1);
-    if (x < cols - 1 && y < rows - 1) v = Math.min(v, d[i + cols + 1] + D2);
-    if (x > 0 && y < rows - 1) v = Math.min(v, d[i + cols - 1] + D2);
-    d[i] = v;
-  }
-  return d;
-}
-
-// Layer "cuong la N" trong file AI chứa CẢ gân lá lẫn cuống, và nằm TRÊN lá chứ không phải sau.
-// Tách theo hình lá: nét nằm trong lòng lá là gân (vẽ đè lên lá, giữ nguyên màu),
-// nét thò ra ngoài là cuống (chìm dưới nước, vẽ sau lá và ngả màu nước).
-function splitStem(leaf, stem) {
-  const W = stem.canvas.width, H = stem.canvas.height;
-  const sc = W / stem.w; // lá xuất ở 2× nên canvas lớn gấp đôi đơn vị px ảnh
-  const src = ctx2d(stem.canvas).getImageData(0, 0, W, H);
-  const vein = new ImageData(W, H), stalk = new ImageData(W, H);
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    const i = (y * W + x) * 4;
-    if (!src.data[i + 3]) continue;
-    const lx = Math.floor(stem.x + x / sc - leaf.x), ly = Math.floor(stem.y + y / sc - leaf.y);
-    const inLeaf = lx >= 0 && ly >= 0 && lx < leaf.w && ly < leaf.h && leaf.alpha[ly * leaf.w + lx] > 128;
-    const dst = inLeaf ? vein : stalk;
-    dst.data[i] = src.data[i]; dst.data[i + 1] = src.data[i + 1];
-    dst.data[i + 2] = src.data[i + 2]; dst.data[i + 3] = src.data[i + 3];
-  }
-  const mk = (img) => {
-    const c = makeCanvas(W, H);
-    ctx2d(c).putImageData(img, 0, 0);
-    return { canvas: c, x: stem.x, y: stem.y, w: stem.w, h: stem.h };
-  };
-  return { vein: mk(vein), stalk: mk(stalk) };
-}
-
-function prepareLeaf(layer) {
-  const { alpha, w, h } = layer;
-  const coarse = coarseCoverage(alpha, w, h, GRID);
-  const solid = new Uint8Array(coarse.cols * coarse.rows);
-  for (let i = 0; i < solid.length; i++) solid[i] = coarse.data[i] > 0.5 ? 1 : 0;
-  const dist = distanceInside(solid, coarse.cols, coarse.rows);
-  let best = 0, bi = 0;
-  for (let i = 0; i < dist.length; i++) if (dist[i] < 1e5 && dist[i] > best) { best = dist[i]; bi = i; }
-  // tâm lá tính theo ô lưới thô, quy về px ảnh trong khung ảnh của lá
-  const pad = { x: ((bi % coarse.cols) + 0.5) * GRID, y: (((bi / coarse.cols) | 0) + 0.5) * GRID };
-  let bound = 0;
-  for (let i = 0; i < coarse.data.length; i++) if (coarse.data[i] > 0.05) {
-    const dx = ((i % coarse.cols) + 0.5) * GRID - pad.x, dy = (((i / coarse.cols) | 0) + 0.5) * GRID - pad.y;
-    bound = Math.max(bound, Math.hypot(dx, dy));
-  }
-  return {
-    ...layer,
-    coarse, pad,
-    padR: best * GRID * 1.05,
-    boundR: bound + GRID,
-  };
-}
-
 /* ------------------------------------------------------------------ drops */
 // Tách lớp giọt nước thành từng giọt rời (nhãn liên thông 8 hướng).
 function splitDrops(canvas, ox, oy) {
@@ -217,16 +128,19 @@ function splitDrops(canvas, ox, oy) {
 
 /* ------------------------------------------------------------------ main */
 export async function prepareAssets() {
+  // Model vịt và 4 model lá là thứ tải lâu nhất: xin ngay từ đầu, không đợi đọc xong manifest. Lỗi tải
+  // thì ao vẫn mở, chỉ thiếu vịt / thiếu lá — đừng vì một file mà trắng cả trang.
+  const modelP = loadDuckModel().catch((err) => { console.warn('[Ao Vịt] Không nạp được model vịt:', err); return null; });
+  const leavesP = loadLeafModels().catch((err) => { console.warn('[Ao Vịt] Không nạp được model lá:', err); return []; });
   const man = await fetch(MANIFEST).then((r) => {
     if (!r.ok) throw new Error('Không đọc được ' + MANIFEST);
     return r.json();
   });
 
-  // Khung ảnh vịt KHÔNG còn được nạp: con vịt giờ dựng bằng khối 3D (duck3d.js). Chỉ còn lấy
-  // `squash` trong manifest — độ ép dẹt của mặt nước, đo được từ chính các khung đó.
+  // Ảnh vịt và ảnh lá trong manifest KHÔNG còn được nạp: cả hai giờ là model 3D (duck3d.js, leaf3d.js).
+  // Từ manifest chỉ còn lấy nước, nét sóng, giọt, vùng tương tác, và `squash` — độ ép dẹt của mặt nước.
   const files = [man.water, man.strokes, man.drops];
-  man.leaves.forEach((e) => { if (e.leaf) files.push(e.leaf); if (e.stem) files.push(e.stem); });
-  const imgs = await Promise.all(files.map((f) => loadImage(f.file)));
+  const [imgs, model, leaves] = await Promise.all([Promise.all(files.map((f) => loadImage(f.file))), modelP, leavesP]);
   const byFile = new Map(files.map((f, i) => [f.file, imgs[i]]));
   const L = (rec) => layerFrom(byFile.get(rec.file), rec);
 
@@ -234,16 +148,11 @@ export async function prepareAssets() {
   const strokes = L(man.strokes);
   const dropsLayer = L(man.drops);
 
-  const leaves = man.leaves.filter((e) => e.leaf).map((e) => {
-    const leaf = prepareLeaf(L(e.leaf));
-    return { leaf, ...(e.stem ? splitStem(leaf, L(e.stem)) : { vein: null, stalk: null }) };
-  });
-
   return {
     water, strokes,
     drops: splitDrops(dropsLayer.canvas, dropsLayer.x, dropsLayer.y),
     leaves,
-    duck: { squash: man.duck.squash },
+    duck: { squash: man.duck.squash, model },
     interactive: { path: new Path2D(man.interactive.d), bounds: man.interactive.bounds },
   };
 }

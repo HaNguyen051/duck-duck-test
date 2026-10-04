@@ -9,11 +9,27 @@
 import * as THREE from 'three';
 import { SUN, AMBIENT_WAVES, AMBIENT_GAIN } from './config.js';
 
-// Trả về (chiều cao, đạo hàm x, đạo hàm y, Laplace) của sóng nền.
-const WAVES_GLSL = /* glsl */ `
+// Phép chiếu ảnh ↔ mặt phẳng nước (xem persp.js) và sóng nền, dùng chung cho shader nước và vật nổi.
+// waves(img, t): sóng phẳng trên MẶT PHẲNG NƯỚC tại điểm ảnh img → (chiều cao, đạo hàm theo px ảnh x,
+// đạo hàm theo px ảnh y, Laplace trên mặt nước). Bước sóng tính trên mặt nước nên lên màn hình sóng ở
+// xa (thấp) ngắn lại, dọc màn hình dẹt lại — cùng phối cảnh với mọi thứ khác.
+export const WAVES_GLSL = /* glsl */ `
 uniform vec4 uWaves[5];
-vec4 waves(vec2 p, float t){
+uniform float uSquash;
+uniform vec4 uPersp; // (cx, y0, near, k): S(y) = near + k·(y − y0)
+float perspS(float y){ return uPersp.z + uPersp.w * (y - uPersp.y); }
+vec2 planeOf(vec2 img){
+  float s = perspS(img.y);
+  return vec2((img.x - uPersp.x) / s, log(s / uPersp.z) / (uPersp.w * uSquash));
+}
+vec2 gradToImage(vec2 g, vec2 img){
+  float s = perspS(img.y);
+  return vec2(g.x / s, g.y / (s * uSquash) - g.x * (img.x - uPersp.x) * uPersp.w / (s * s));
+}
+vec4 waves(vec2 img, float t){
+  vec2 p = planeOf(img);
   vec4 r = vec4(0.0);
+  vec2 gp = vec2(0.0);
   for (int i = 0; i < 5; i++){
     vec4 w = uWaves[i];
     vec2 dd = vec2(cos(w.x), sin(w.x));
@@ -21,9 +37,10 @@ vec4 waves(vec2 p, float t){
     float ph = k * (dot(dd, p) - w.z * t);
     float s = sin(ph);
     r.x += w.w * s;
-    r.yz += w.w * k * cos(ph) * dd;
+    gp += w.w * k * cos(ph) * dd;
     r.w += -w.w * k * k * s;
   }
+  r.yz = gradToImage(gp, img);
   return r;
 }`;
 
@@ -43,8 +60,9 @@ uniform sampler2D uWater;
 uniform sampler2D uHeight;
 uniform vec4 uArea;
 uniform vec4 uRegion;
+uniform vec2 uSimOrigin; // gốc lưới sóng trên mặt phẳng nước
 uniform vec2 uGrid;
-uniform float uCell, uAmpScale;
+uniform float uCell, uAmpScale; // ô vuông trên mặt phẳng nước (toạ độ phối cảnh)
 uniform float uTime, uAmb, uGain, uRefr, uFocus, uFocusTint, uTIR, uShade, uSunGain;
 uniform vec2 uSun;
 uniform vec3 uL;
@@ -53,7 +71,7 @@ varying vec3 vWorld;
 ${WAVES_GLSL}
 
 void main(){
-  vec2 g = (vImg - uArea.xy) / (uGrid * uCell);
+  vec2 g = (planeOf(vImg) - uSimOrigin) / (uGrid * uCell); // toạ độ texture lưới sóng tại điểm ảnh này
   // lấy mẫu cách 1,5 ô: nội suy song tuyến làm mượt, không lộ ô lưới
   vec2 tx = 1.5 / uGrid;
   float h  = texture2D(uHeight, g).r;
@@ -62,8 +80,8 @@ void main(){
   float hu = texture2D(uHeight, g - vec2(0.0, tx.y)).r;
   float hd = texture2D(uHeight, g + vec2(0.0, tx.y)).r;
 
-  vec2 grad = vec2(hr - hl, hd - hu) / (3.0 * uCell) * uGain;
-  // độ cong quy về ô 4 px để sáng tối như nhau ở mọi độ phóng
+  vec2 grad = gradToImage(vec2(hr - hl, hd - hu) / (3.0 * uCell), vImg) * uGain; // độ dốc theo px ảnh
+  // độ cong trên mặt nước (lưới đẳng hướng ở đó), quy về ô 4 px để sáng tối như nhau ở mọi độ phóng
   float lapSim = (hl + hr + hu + hd - 4.0 * h) * uGain / uAmpScale;
 
   vec4 amb = waves(vImg, uTime) * uAmb;
@@ -104,6 +122,9 @@ export function createWater({ waterTexture, region, area, sim, reduceMotion }) {
     uRegion: { value: new THREE.Vector4(region.x, region.y, region.w, region.h) },
     uGrid: { value: new THREE.Vector2(sim.cols, sim.rows) },
     uCell: { value: sim.cell },
+    uSimOrigin: { value: new THREE.Vector2(sim.ox, sim.oy) },
+    uSquash: { value: sim.sq },
+    uPersp: { value: sim.persp.uniform() },
     uAmpScale: { value: sim.ampScale },
     uTime: { value: 0 },
     uAmb: { value: (reduceMotion ? 0.35 : 1) * AMBIENT_GAIN },
@@ -126,13 +147,16 @@ export function createWater({ waterTexture, region, area, sim, reduceMotion }) {
 }
 
 // Sóng nền tính trên CPU, cùng công thức với shader, để vịt và lá nhấp nhô khớp mặt nước.
-export function waveAt(x, y, t, gain, out) {
-  let h = 0, gx = 0, gy = 0;
+// persp: phép chiếu ảnh ↔ mặt phẳng nước (persp.js). Đạo hàm trả về theo px ảnh.
+export function waveAt(x, y, t, gain, out, persp) {
+  const [X, Y] = persp.toPlane(x, y);
+  let h = 0, gX = 0, gY = 0;
   for (const w of AMBIENT_WAVES) {
     const dx = Math.cos(w[0]), dy = Math.sin(w[0]), k = 6.2831853 / w[1];
-    const ph = k * (dx * x + dy * y - w[2] * t), s = Math.sin(ph), c = Math.cos(ph);
-    h += w[3] * s; gx += w[3] * k * c * dx; gy += w[3] * k * c * dy;
+    const ph = k * (dx * X + dy * Y - w[2] * t), s = Math.sin(ph), c = Math.cos(ph);
+    h += w[3] * s; gX += w[3] * k * c * dx; gY += w[3] * k * c * dy;
   }
+  const [gx, gy] = persp.gradToImage(gX, gY, x, y);
   out.h = h * gain; out.gx = gx * gain; out.gy = gy * gain;
   return out;
 }

@@ -3,29 +3,52 @@
  html,body{margin:0;height:100%;background:#2f6ea8;color:#fff;font:13px/1.4 system-ui,sans-serif}
  canvas{display:block;width:100vw;height:auto}
  p{position:fixed;left:12px;bottom:10px;margin:0;opacity:.75}
+ p code{opacity:.9}
 </style>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.186.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.186.0/examples/jsm/"}}</script>
 </head><body>
 <canvas id="c"></canvas>
-<p>Soi con vịt 3D ở 8 hướng quay. Vạch trắng là mặt nước. Tỉ lệ chỉnh ở <code>DUCK3D</code> trong js/pond/config.js, dáng ở <code>PROFILE</code> trong js/pond/duck3d.js.</p>
+<p>Soi model vịt ở 8 hướng quay, góc nhìn như trong ao (nghiêng 23°). Vạch trắng là mặt nước.
+Số chỉnh ở <code>DUCK_MODEL</code> (js/pond/config.js); thử nhanh bằng URL, ví dụ
+<code>/dev-duck?water=0.36&amp;legSpread=0.14&amp;paddleBase=-0.5&amp;tilt=0&amp;freeze=1&amp;tailAngle=0.3&amp;headYaw=0.6</code>
+(viết <code>/dev-duck</code>, không có <code>.html</code> — <code>serve</code> chuyển hướng và làm rơi tham số).</p>
 <script type="module">
 import * as THREE from 'three';
-import { buildDuckGeometry, duckMaterial } from './js/pond/duck3d.js';
+import { DUCK_MODEL } from './js/pond/config.js';
+import { loadDuckModel, duckMaterial } from './js/pond/duck3d.js';
+
+// Ghi đè tạm DUCK_MODEL bằng tham số URL (chỉ trang này), để dò số mà không phải sửa file.
+const q = new URLSearchParams(location.search);
+// chỉ đè các khoá là số/mảng số của chính DUCK_MODEL; khoá object (tail) và giá trị không phải số thì bỏ qua
+for (const [k, v] of q) {
+  if (!Object.hasOwn(DUCK_MODEL, k) || (typeof DUCK_MODEL[k] === 'object' && !Array.isArray(DUCK_MODEL[k]))) continue;
+  const num = v.includes(',') ? v.split(',').map(Number) : Number(v);
+  if ([].concat(num).some(Number.isNaN)) { console.warn('bỏ qua', k, '=', v); continue; }
+  DUCK_MODEL[k] = num;
+}
+const squash = q.has('tilt') ? Number(q.get('tilt')) : 0.39; // tilt=0: nhìn ngang, không nghiêng
+const freeze = q.has('freeze');
+const tailFixed = q.has('tailAngle') ? Number(q.get('tailAngle')) : null; // tailAngle=0.3: ép đuôi lệch 0,3 rad để soi vùng đuôi
+const headYaw = q.has('headYaw') ? Number(q.get('headYaw')) : null;   // headYaw=0.6 / headPitch=-0.3: ép góc đầu để soi vùng cổ
+const headPitch = q.has('headPitch') ? Number(q.get('headPitch')) : null;
+
 const N = 8, W = 1600, H = 820;
 const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
 r.setPixelRatio(2); r.setSize(W, H, false); r.setClearColor(0x2f6ea8, 1);
 const sc = new THREE.Scene();
 const cam = new THREE.OrthographicCamera(-W / 2, W / 2, H / 2, -H / 2, -5000, 5000);
-const geo = buildDuckGeometry();
-const squash = 0.39, S = 0.42, cols = 4, rows = Math.ceil(N / cols);
+
+const model = await loadDuckModel();
+console.log('duck model', { height: model.height, water: model.water, contact: model.contact, legs: model.legs,
+  offAxis: model.offAxis, tris: model.geometry.index.count / 3, verts: model.geometry.attributes.position.count });
+const S = 0.42, cols = 4, rows = Math.ceil(N / cols);
 const mats = [];
 for (let i = 0; i < N; i++) {
-  const mat = duckMaterial();
-  mat.uniforms.uWaterY.value = 0;
-  mat.uniforms.uRefr.value = 0;
+  const mat = duckMaterial(model);
+  mat.uniforms.uRefr.value = 0; // không khúc xạ ở đây cho dễ soi hình
   mat.uniforms.uCentre.value.set(0, 0);
   mats.push(mat);
-  const yaw = new THREE.Group(); yaw.add(new THREE.Mesh(geo, mat));
+  const yaw = new THREE.Group(); yaw.add(new THREE.Mesh(model.geometry, mat));
   yaw.rotation.y = (i / N) * Math.PI * 2;
   const tilt = new THREE.Group(); tilt.add(yaw); tilt.rotation.x = -Math.asin(squash);
   const root = new THREE.Group(); root.add(tilt); root.scale.setScalar(S);
@@ -39,7 +62,14 @@ for (let i = 0; i < N; i++) {
   sc.add(line);
 }
 r.setAnimationLoop((t) => {
-  for (const m of mats) m.uniforms.uTime.value = t / 1000;
+  const tt = freeze ? 0.3 : t / 1000;
+  for (const m of mats) {
+    m.uniforms.uTime.value = tt;
+    m.uniforms.uTail.value = tailFixed ?? Math.sin(tt * 6.2831853 * DUCK_MODEL.tail.hz) * DUCK_MODEL.tail.amp; // ở đây vẫy liên tục cho dễ soi
+    m.uniforms.uHeadYaw.value = headYaw ?? Math.sin(tt * 0.9) * 0.6;      // ở đây đầu ngó qua lại liên tục
+    m.uniforms.uHeadPitch.value = headPitch ?? Math.sin(tt * 1.7) * 0.15;
+  }
   r.render(sc, cam);
 });
+window.__duck = { model, mats, DUCK_MODEL };
 </script></body></html>

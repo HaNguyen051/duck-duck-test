@@ -1,0 +1,43 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Soi lá sen</title>
+<style>
+ html,body{margin:0;height:100%;background:#2f6ea8;color:#fff;font:13px/1.4 system-ui,sans-serif}
+ canvas{display:block;width:100vw;height:auto}
+ p{position:fixed;left:12px;bottom:10px;margin:0;opacity:.75}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.186.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.186.0/examples/jsm/"}}</script>
+</head><body>
+<canvas id="c"></canvas>
+<p>Soi 4 model lá. Hàng trên: góc nhìn trong ao (nghiêng 23°, thấy mặt dưới). Hàng dưới: nhìn thẳng từ trên xuống.
+Vạch trắng là mặt nước. URL: <code>/dev-leaf?tilt=0.6</code> (độ ép dẹt riêng cho lá), <code>flip=1,0,0,1</code> (lật từng lá).</p>
+<script type="module">
+import * as THREE from 'three';
+import { LEAF_MODEL, LEAVES } from './js/pond/config.js';
+import { loadLeafModels, leafMaterial } from './js/pond/leaf3d.js';
+const q = new URLSearchParams(location.search);
+if (q.has('flip')) LEAF_MODEL.flip = q.get('flip').split(',').map((v) => v === '1');
+const squash = q.has('tilt') ? Number(q.get('tilt')) : 0.39;
+const freeze = q.has('freeze');
+
+const W = 1600, H = 820, cols = 4;
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+r.setPixelRatio(2); r.setSize(W, H, false); r.setClearColor(0x2f6ea8, 1);
+const sc = new THREE.Scene();
+const cam = new THREE.OrthographicCamera(-W / 2, W / 2, H / 2, -H / 2, -5000, 5000);
+const models = await loadLeafModels();
+console.log('leaf models', models.map((m) => ({ radius: m.radius, depth: +m.depth.toFixed(1), top: +m.top.toFixed(1), tris: m.geometry.index.count / 3 })));
+const mats = [];
+models.forEach((m, i) => {
+  [squash, -1].forEach((sq, row) => { // hàng 0: nghiêng như trong ao; hàng 1: nhìn từ trên xuống
+    const mat = leafMaterial(m); mat.uniforms.uRefr.value = 0; mats.push(mat);
+    const mesh = new THREE.Mesh(m.geometry, mat);
+    const tilt = new THREE.Group(); tilt.add(mesh); tilt.rotation.x = -Math.asin(sq);
+    const root = new THREE.Group(); root.add(tilt); root.scale.setScalar(1.05);
+    root.position.set(-W / 2 + W / (cols * 2) + i * (W / cols), H / 4 - row * (H / 2) + (row ? 0 : 60), 0);
+    sc.add(root);
+    const line = new THREE.Mesh(new THREE.PlaneGeometry(W / cols - 20, 1.5), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 }));
+    line.position.copy(root.position); line.position.z = 900; sc.add(line);
+  });
+});
+r.setAnimationLoop((t) => { for (const m of mats) m.uniforms.uTime.value = freeze ? 0.3 : t / 1000; r.render(sc, cam); });
+window.__leaf = { models, mats, LEAF_MODEL };
+</script></body></html>
