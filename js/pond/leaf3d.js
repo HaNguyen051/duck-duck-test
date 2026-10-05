@@ -1,8 +1,7 @@
-// Lá sen là MODEL 3D (models/la_N.glb) do Tripo sinh từ ảnh lá vẽ, đã được tools/prepare-leaf.mjs xoay
-// nằm ngang: mặt lá trong mặt phẳng XZ, tâm ở gốc, bán kính mặt lá = 1, cuống bẻ rủ xuống −Y.
-// File này nạp 4 mẫu, đưa về px ảnh, đặt mực nước ngay dưới đáy mặt lá, và tạo vật liệu dùng chung
-// shader "vật nổi" với vịt (floater.js): mặt lá nổi → nhìn xuyên qua mặt nước nên xỉn và lay theo
-// sóng; cuống chìm → rõ nét.
+// Lá sen là MODEL 3D (models/sen_N.glb) do Tripo sinh từ ảnh lá nhìn từ trên, đã qua tools/prepare-pad.mjs:
+// mặt lá nằm ngang trong mặt phẳng XZ, tâm ở gốc, mặt dưới ở y = 0, bán kính mặt lá = 1, KHÔNG có cuống (giữ như model gốc).
+// File này nạp các mẫu, đưa về px ảnh, đặt mực nước ngay dưới đáy mặt lá, và tạo vật liệu dùng chung
+// shader "vật nổi" với vịt (floater.js): lá nổi → nhìn xuyên qua mặt nước nên xỉn và lay theo sóng.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';

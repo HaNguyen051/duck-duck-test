@@ -1,14 +1,10 @@
-// Nạp asset: ảnh xuất từ duck-1.ai (images-duck-v2/manifest.json) cho mặt nước và giọt, model 3D cho
-// vịt và lá. prepareAssets chạy một lần lúc mở trang; buildWater dựng mặt nước nối dài cho từng khung nhìn.
+// Nạp asset: nền nướng sẵn (images-bg/bg.webp), các SVG hiệu ứng của gói art (lưới sóng trắng, tia sáng,
+// bong bóng) rasterize thành texture, giọt nước từ file AI cũ (images-duck-v2/manifest.json), model 3D cho
+// vịt và lá. prepareAssets chạy một lần lúc mở trang.
 import * as THREE from 'three';
-import { IMG_DIR, MANIFEST } from './config.js';
+import { IMG_DIR, MANIFEST, BG, NET, BUBBLES, SPARKLES } from './config.js';
 import { loadDuckModel } from './duck3d.js';
 import { loadLeafModels } from './leaf3d.js';
-
-const REFRACT_MARGIN = 56; // lề quanh vùng nước để khúc xạ không lấy mẫu ra ngoài
-const SEAM_BLEND = 220;    // nước nối dài: hoà mép nối trong ngần này px ảnh
-const TILE_SHIFT = 130;    // mỗi bản lặp dịch dọc ngần này px ảnh
-const STROKE_ALPHA = 0.42; // độ đậm của lớp nét sóng vẽ sẵn (0 = bỏ hẳn)
 
 /* ------------------------------------------------------------------ helpers */
 function makeCanvas(w, h) {
@@ -19,18 +15,63 @@ function makeCanvas(w, h) {
 }
 const ctx2d = (c) => c.getContext('2d', { willReadFrequently: true });
 
-function loadImage(name) {
+function loadImageURL(url) {
   return new Promise((resolve, reject) => {
     const im = new Image();
     im.decoding = 'async';
     im.onload = () => resolve(im);
-    im.onerror = () => reject(new Error('Không tải được ' + name));
-    im.src = IMG_DIR + name;
+    im.onerror = () => reject(new Error('Không tải được ' + url));
+    im.src = url;
   });
 }
+const loadImage = (name) => loadImageURL(IMG_DIR + name);
 
-// Một lớp đã xuất. Canvas giữ nguyên độ phân giải gốc của file (lá xuất ở 2× nên nét hơn khi phóng to),
-// còn w/h và mảng alpha quy về px ảnh để mọi phép thử va chạm dùng chung một hệ toạ độ.
+// Rasterize một SVG (chỉ có viewBox, như Illustrator xuất) thành canvas rộng `w` px. Ghi thẳng width/height
+// vào thẻ <svg> rồi vẽ qua blob URL để trình duyệt dựng vector đúng cỡ này (không phóng từ cỡ mặc định 300×150).
+// square: canvas vuông, hình căn giữa (sprite tròn như bong bóng, sao).
+async function rasterSvg(url, w, square = false) {
+  const txt = await fetch(url).then((r) => {
+    if (!r.ok) throw new Error('Không tải được ' + url);
+    return r.text();
+  });
+  const vb = /viewBox="([^"]+)"/.exec(txt);
+  const [, , vw, vh] = vb ? vb[1].trim().split(/[\s,]+/).map(Number) : [0, 0, 1, 1];
+  const h = Math.max(1, Math.round((w * vh) / vw));
+  const svg = txt.replace(/<svg\b([^>]*)>/, (m, a) => `<svg${a.replace(/\s(width|height)="[^"]*"/g, '')} width="${w}" height="${h}">`);
+  const blobUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+  try {
+    const img = await loadImageURL(blobUrl).catch(() => { throw new Error('Không vẽ được ' + url); });
+    const side = Math.max(w, h);
+    const c = makeCanvas(square ? side : w, square ? side : h);
+    ctx2d(c).drawImage(img, square ? (side - w) / 2 : 0, square ? (side - h) / 2 : 0, w, h);
+    return c;
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
+}
+
+// Biến một canvas (ảnh trắng + alpha) thành ảnh LẶP ĐƯỢC: trộn với chính nó dịch nửa khổ (ảnh dịch liền mạch
+// ở mép, ảnh gốc liền mạch ở giữa), hoà bằng mặt nạ mềm rộng `border` px quanh viền. Lưới sóng trắng lấy mẫu
+// trên mặt phẳng nước rộng hơn một bản lưới nên phải lặp; lặp soi gương thì lộ đường nối nửa ô.
+function makeTileable(c, border) {
+  const w = c.width, h = c.height, g = ctx2d(c);
+  const src = g.getImageData(0, 0, w, h), out = g.createImageData(w, h), a = src.data, o = out.data;
+  const ramp = (v, n) => { const d = Math.min(v, n - 1 - v); return d >= border ? 0 : 1 - (d / border) * (d / border) * (3 - 2 * (d / border)); };
+  const mx = new Float32Array(w), my = new Float32Array(h);
+  for (let x = 0; x < w; x++) mx[x] = ramp(x, w);
+  for (let y = 0; y < h; y++) my[y] = ramp(y, h);
+  for (let y = 0; y < h; y++) {
+    const ys = ((y + (h >> 1)) % h) * w;
+    for (let x = 0; x < w; x++) {
+      const m = Math.max(mx[x], my[y]), i = (y * w + x) * 4, j = (ys + ((x + (w >> 1)) % w)) * 4;
+      for (let k = 0; k < 4; k++) o[i + k] = a[i + k] * (1 - m) + a[j + k] * m;
+    }
+  }
+  g.putImageData(out, 0, 0);
+  return c;
+}
+
+// Một lớp đã xuất từ file AI. Canvas giữ nguyên độ phân giải gốc của file, còn w/h và mảng alpha quy về px ảnh.
 function layerFrom(img, rec) {
   const sc = rec.scale || 1;
   const c = makeCanvas(rec.w * sc, rec.h * sc);
@@ -56,6 +97,7 @@ export function textureFrom(canvas) {
   return t;
 }
 
+// Texture màu từ canvas (sprite): sRGB, nhân sẵn alpha, có mipmap.
 export function makeTexture(canvas) {
   const t = new THREE.CanvasTexture(canvas);
   t.colorSpace = THREE.SRGBColorSpace;
@@ -67,7 +109,20 @@ export function makeTexture(canvas) {
   return t;
 }
 
-// Texture pháp tuyến: dữ liệu hình học, không phải màu — không chuyển không gian màu.
+// Texture màu từ ảnh đục (nền): sRGB, mipmap, kéo dài mép khi lấy mẫu ngoài khổ.
+export function imageTexture(img) {
+  const t = new THREE.Texture(img);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  t.anisotropy = 4;
+  t.needsUpdate = true;
+  return t;
+}
+
+// Texture dữ liệu (mặt nạ, pháp tuyến): không phải màu — không chuyển không gian màu.
 export function dataTexture(canvas) {
   const t = new THREE.CanvasTexture(canvas);
   t.colorSpace = THREE.NoColorSpace;
@@ -128,92 +183,33 @@ function splitDrops(canvas, ox, oy) {
 
 /* ------------------------------------------------------------------ main */
 export async function prepareAssets() {
-  // Model vịt và 4 model lá là thứ tải lâu nhất: xin ngay từ đầu, không đợi đọc xong manifest. Lỗi tải
-  // thì ao vẫn mở, chỉ thiếu vịt / thiếu lá — đừng vì một file mà trắng cả trang.
-  const modelP = loadDuckModel().catch((err) => { console.warn('[Ao Vịt] Không nạp được model vịt:', err); return null; });
-  const leavesP = loadLeafModels().catch((err) => { console.warn('[Ao Vịt] Không nạp được model lá:', err); return []; });
+  const warn = (what, fallback = null) => (err) => { console.warn(`[Ao Vịt] Không nạp được ${what}:`, err); return fallback; };
+  // Mọi thứ xin cùng lúc. Nền hỏng thì không còn gì để vẽ → để lỗi lan lên main.js. Model, lưới sóng, bong
+  // bóng, sao hỏng thì ao vẫn mở, chỉ thiếu món đó — đừng vì một file mà trắng cả trang.
+  const bgP = loadImageURL(BG.url).then(imageTexture);
+  const modelP = loadDuckModel().catch(warn('model vịt'));
+  const leavesP = loadLeafModels().catch(warn('model lá', []));
+  const netP = rasterSvg(NET.url, NET.texW).then((c) => {
+    const t = makeTexture(makeTileable(c, Math.round(c.width * 0.12)));
+    t.wrapS = t.wrapT = THREE.RepeatWrapping; // lưới lấy mẫu trên mặt phẳng nước rộng hơn một bản nên lặp
+    return { texture: t, aspect: c.width / c.height };
+  }).catch(warn('lưới sóng trắng'));
+  const bubblesP = Promise.all(BUBBLES.urls.map((u) => rasterSvg(u, 256, true).then(makeTexture))).catch(warn('bong bóng', []));
+  const sparkP = rasterSvg(SPARKLES.url, 256, true).then(makeTexture).catch(warn('tia sáng'));
+
+  // Từ file AI cũ chỉ còn dùng giọt nước (bắn lên khi chạm / vịt rũ) và `squash` — độ ép dẹt của mặt nước.
   const man = await fetch(MANIFEST).then((r) => {
     if (!r.ok) throw new Error('Không đọc được ' + MANIFEST);
     return r.json();
   });
-
-  // Ảnh vịt và ảnh lá trong manifest KHÔNG còn được nạp: cả hai giờ là model 3D (duck3d.js, leaf3d.js).
-  // Từ manifest chỉ còn lấy nước, nét sóng, giọt, vùng tương tác, và `squash` — độ ép dẹt của mặt nước.
-  const files = [man.water, man.strokes, man.drops];
-  const [imgs, model, leaves] = await Promise.all([Promise.all(files.map((f) => loadImage(f.file))), modelP, leavesP]);
-  const byFile = new Map(files.map((f, i) => [f.file, imgs[i]]));
-  const L = (rec) => layerFrom(byFile.get(rec.file), rec);
-
-  const water = L(man.water);
-  const strokes = L(man.strokes);
-  const dropsLayer = L(man.drops);
+  const dropsLayer = layerFrom(await loadImage(man.drops.file), man.drops);
+  const [bg, net, bubbles, spark, model, leaves] = await Promise.all([bgP, netP, bubblesP, sparkP, modelP, leavesP]);
 
   return {
-    water, strokes,
+    bg: { texture: bg, rect: BG.rect },
+    net, bubbles, spark,
     drops: splitDrops(dropsLayer.canvas, dropsLayer.x, dropsLayer.y),
     leaves,
     duck: { squash: man.duck.squash, model },
-    interactive: { path: new Path2D(man.interactive.d), bounds: man.interactive.bounds },
   };
-}
-
-/* ------------------------------------------------------------------ water for a view */
-// Dựng texture mặt nước cho vùng `world` (toạ độ ảnh, có thể vượt khổ artboard).
-// Chiều ngang: lặp lại nền nước theo chu kỳ W − SEAM_BLEND, mỗi bản hoà vào bản bên trái trong
-// SEAM_BLEND px ở mép trái của nó nên không có đường nối; bản lẻ lật ngang và mọi bản dịch dọc
-// TILE_SHIFT·k px để cùng một mảng vân nước không hiện hai lần cạnh nhau.
-// Chiều dọc: soi gương ở mép trên/dưới để dải màu sáng–tối theo chiều cao không bị đảo.
-// Nét sóng (vien nuoc) chỉ vẽ đúng một lần ở vị trí gốc của nó.
-export function buildWater(assets, world) {
-  const src = assets.water.canvas;
-  const W = src.width, H = src.height, B = SEAM_BLEND, P = W - B;
-  const OX = assets.water.x, OY = assets.water.y; // góc trên trái của nền nước, toạ độ ảnh
-  const R = {
-    x: Math.floor(world.x - REFRACT_MARGIN),
-    y: Math.floor(world.y - REFRACT_MARGIN),
-    w: Math.ceil(world.w + REFRACT_MARGIN * 2),
-    h: Math.ceil(world.h + REFRACT_MARGIN * 2),
-  };
-  // bản nền nước (thường / lật ngang) có mép trái mờ dần trong B px
-  const ramp = (flip) => {
-    const r = makeCanvas(W, H), g = ctx2d(r);
-    if (flip) g.setTransform(-1, 0, 0, 1, W, 0);
-    g.drawImage(src, 0, 0);
-    g.setTransform(1, 0, 0, 1, 0, 0);
-    const gr = g.createLinearGradient(0, 0, B, 0);
-    gr.addColorStop(0, 'rgba(0,0,0,0)');
-    gr.addColorStop(1, 'rgba(0,0,0,1)');
-    g.globalCompositeOperation = 'destination-in';
-    g.fillStyle = gr;
-    g.fillRect(0, 0, W, H);
-    return r;
-  };
-  assets.waterRamp ||= [ramp(false), ramp(true)];
-
-  // 1) dải ngang: đủ bề rộng R, cao bằng ảnh nền. Lót một lớp lặp thẳng trước để chỗ hở do dịch dọc không trống.
-  const strip = makeCanvas(R.w, H), g = ctx2d(strip);
-  const sx = R.x - OX; // toạ độ của mép trái vùng cắt trong hệ pixel của nền nước
-  const k0 = Math.floor(sx / P) - 1, k1 = Math.ceil((sx + R.w) / P);
-  for (let k = k0; k <= k1; k++) g.drawImage(src, k * P - sx, 0);
-  for (let k = k0; k <= k1; k++) g.drawImage(assets.waterRamp[Math.abs(k) % 2], k * P - sx, k * TILE_SHIFT);
-  // Nét sóng (vien nuoc) vẽ đúng vị trí gốc, không lặp. Trong tranh gốc chúng là vệt nước quanh
-  // chỗ vịt và lá ĐỨNG YÊN; giờ vịt bơi và lá trôi nên để nhạt đi, chỉ còn là vân mặt nước.
-  g.globalAlpha = STROKE_ALPHA;
-  g.drawImage(assets.strokes.canvas, assets.strokes.x - R.x, assets.strokes.y - OY);
-  g.globalAlpha = 1;
-
-  // 2) cắt theo R; ngoài khổ ảnh nền thì soi gương dải ngang theo chiều dọc
-  const canvas = makeCanvas(R.w, R.h), c = ctx2d(canvas);
-  const top = OY - R.y; // vị trí mép trên của nền nước trong canvas kết quả
-  c.drawImage(strip, 0, top);
-  const mirror = (clipY, clipH, f) => {
-    if (clipH <= 0) return;
-    c.save();
-    c.beginPath(); c.rect(0, clipY, R.w, clipH); c.clip();
-    c.setTransform(1, 0, 0, -1, 0, f); c.drawImage(strip, 0, 0);
-    c.restore();
-  };
-  mirror(0, top, top);                                   // phía trên: y → 2·top − y
-  mirror(top + H, R.h - top - H, 2 * (top + H));          // phía dưới
-  return { canvas, region: R };
 }

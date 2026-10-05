@@ -4,7 +4,7 @@
 // cùng môi trường với người xem nên rõ nét. Vịt bật thêm DUCK_RIG để có chân, đầu, đuôi cử động.
 import * as THREE from 'three';
 import { SUN, AMBIENT_WAVES, AMBIENT_GAIN } from './config.js';
-import { WAVES_GLSL } from './water.js';
+import { WAVES_GLSL, NET_GLSL, netUniforms } from './water.js';
 import { FLAT_PERSP } from './persp.js';
 
 export const FLOATER_VERT = /* glsl */ `
@@ -27,6 +27,7 @@ uniform float uCell, uSimGain;
 varying vec2 vUv;
 varying vec3 vN, vP;
 varying float vLocalY;
+varying vec2 vImg; // toạ độ ảnh của điểm (để phủ lưới sóng trắng lên phần nổi)
 ${WAVES_GLSL}
 
 // xoay điểm và pháp tuyến quanh trục Z (ngang thân) đi qua pivot — gập chân trước/sau
@@ -93,6 +94,7 @@ void main(){
   vN = normalize(mat3(modelMatrix) * nor);
   vP = world.xyz;
   vUv = uv;
+  vImg = vec2(world.x / uKp + uCentre.x, uCentre.y - world.y / uKp);
   // Chuyển độ cao sang fragment shader thay vì chuyển sẵn kết quả nổi/chìm: nội suy một giá trị
   // 0/1 giữa các đỉnh thì đường ranh mặt nước bám theo cạnh tam giác, hiện ra răng cưa bậc thang.
   vLocalY = pos.y - uWaterY;
@@ -102,11 +104,14 @@ void main(){
 export const FLOATER_FRAG = /* glsl */ `
 uniform sampler2D uMap, uNormalMap;
 uniform vec2 uNormalScale;
-uniform vec3 uL, uThroughTint, uTint, uBelowTint;
-uniform float uAmbient, uDiffuse, uEdge, uThroughDesat, uBelowDepth, uBelowDesat;
+uniform vec3 uL, uThroughTint, uTint, uBelowTint, uThroughHaze;
+uniform float uAmbient, uDiffuse, uEdge, uThroughDesat, uBelowDepth, uBelowDesat, uThroughHazeAmt, uTime, uNetGain;
 varying vec2 vUv;
 varying vec3 vN, vP;
 varying float vLocalY;
+varying vec2 vImg;
+${WAVES_GLSL}
+${NET_GLSL}
 
 // Model không có tangent, nên dựng khung tiếp tuyến từ đạo hàm màn hình (cùng cách three.js làm
 // trong normalmap_pars_fragment). glTF quy ước trục Y của normal map ngược với khung này → uNormalScale.y âm.
@@ -140,8 +145,12 @@ void main(){
   // Nhẹ tay — cái bán được cảm giác "qua lớp nước" là chuyển động (khúc xạ ở vertex shader), không phải màu.
   float through = smoothstep(-uEdge, uEdge, vLocalY);
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
-  vec3 veiled = mix(col, vec3(lum), uThroughDesat) * uThroughTint;
+  // rồi pha về màu sáng của bầu trời nhìn qua mặt nước (nền mới sáng: phần nổi nhạt đi chứ không tối đi)
+  vec3 veiled = mix(mix(col, vec3(lum), uThroughDesat) * uThroughTint, uThroughHaze, uThroughHazeAmt);
   col = mix(col, veiled, through);
+  // Phần nổi nhìn xuyên qua mặt nước nên LƯỚI SÓNG TRẮNG của mặt nước phủ lên nó (như tranh mẫu); phần chìm
+  // ở trước mặt nước thì không. uNetA.z = 0 khi không có lưới (trang soi).
+  if (uNetA.z + uNetA.w > 0.0) col = applyNet(col, netAt(vImg, vec2(0.0), uTime) * through * uNetGain);
   // Phần CHÌM: ở trong nước thì ngả màu nước — xanh lam, hơi tối, bớt bão hoà — càng sâu càng rõ
   // (nước hút ánh sáng đỏ). Không có bước này thì mép lá trĩu xuống nước vẫn tươi nguyên như ngoài
   // không khí. Vịt để rất nhẹ (bụng gần mặt nước gần như không đổi, chân sâu hơn mới ngả), lá và cuống rõ hơn.
@@ -154,7 +163,7 @@ void main(){
 }`;
 
 // Uniform chung. `look` = { refract, refractMax, ambient, diffuse, normalScale, waterEdge, throughTint, throughDesat,
-// belowTint, belowDepth, belowDesat }
+// throughHaze, throughHazeAmt, netGain, belowTint, belowDepth, belowDesat }
 // (DUCK_MODEL hoặc LEAF_MODEL). `ambGain`: độ mạnh sóng nền của cảnh (giảm khi bật giảm chuyển động).
 export function floaterUniforms(model, look, ambGain = AMBIENT_GAIN) {
   return {
@@ -183,23 +192,31 @@ export function floaterUniforms(model, look, ambGain = AMBIENT_GAIN) {
     uEdge: { value: look.waterEdge },
     uThroughTint: { value: new THREE.Vector3(...look.throughTint) },
     uThroughDesat: { value: look.throughDesat },
+    uThroughHaze: { value: new THREE.Vector3(...(look.throughHaze || [1, 1, 1])) },
+    uThroughHazeAmt: { value: look.throughHazeAmt || 0 },
+    uNetGain: { value: look.netGain ?? 1 }, // lưới sóng trắng phủ lên phần nổi đậm bao nhiêu (lá: nhẹ hơn vịt)
+    uRadial: { value: 0 }, // trang soi: không phối cảnh
+    ...netUniforms(null, false), // trang soi: không có lưới sóng trắng; bindFloater nối lưới của cảnh
     uBelowTint: { value: new THREE.Vector3(...(look.belowTint || [1, 1, 1])) },
     uBelowDepth: { value: look.belowDepth || 1 },
     uBelowDesat: { value: look.belowDesat || 0 },
   };
 }
 
-// Nối vật liệu với lưới sóng của cảnh (để phần nổi bị gợn sóng bẻ lệch) và với khung nhìn.
-export function bindFloater(material, { sim, centre, squash }) {
+// Nối vật liệu với lưới sóng của cảnh (để phần nổi bị gợn sóng bẻ lệch), với khung nhìn, và với lưới sóng
+// trắng (net = { texture, aspect } của assets, phủ lên phần nổi).
+export function bindFloater(material, { sim, centre, squash, net, reduceMotion }) {
   const u = material.uniforms;
   u.uCentre.value.set(centre[0], centre[1]);
   u.uSquash.value = squash;
+  if (net) Object.entries(netUniforms(net, reduceMotion)).forEach(([k, v]) => { u[k].value = v.value; });
   if (sim) {
     u.uHeight.value = sim.texture;
     u.uSimOrigin.value.set(sim.ox, sim.oy);
     u.uGrid.value.set(sim.cols, sim.rows);
     u.uCell.value = sim.cell;
     u.uPersp.value.copy(sim.persp.uniform());
+    u.uRadial.value = sim.persp.radial ? 1 : 0;
     u.uSimGain.value = 1;
   }
 }

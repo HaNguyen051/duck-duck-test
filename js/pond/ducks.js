@@ -7,7 +7,7 @@
 // Mực nước cắt thân vịt được tính thẳng trong shader theo độ cao của từng đỉnh, nên chính xác tuyệt
 // đối — bỏ được toàn bộ đoạn dò mực nước theo cột, cắt ảnh, chừa lề và hoà hai khung của bản cũ.
 import * as THREE from 'three';
-import { DUCKS, DUCK_MODEL, Z, CAMERA, depthScale } from './config.js';
+import { DUCKS, DUCK_MODEL, Z, CAMERA, PERSPECTIVE, surfaceBottom } from './config.js';
 import { duckMaterial } from './duck3d.js';
 import { bindFloater } from './floater.js';
 import { waveAt } from './water.js';
@@ -19,7 +19,7 @@ const wrap = (a) => { a %= TAU; return a < 0 ? a + TAU : a; };
 const delta = (a, b) => { const d = wrap(a - b); return d > Math.PI ? d - TAU : d; };
 
 export class Ducks {
-  constructor({ scene, view, world, sim, persp, ambGain, reduceMotion, squash, centre, model, splash }) {
+  constructor({ scene, view, world, sim, persp, ambGain, reduceMotion, squash, centre, model, splash, net }) {
     this.V = view;
     this.persp = persp;
     this.splash = splash;
@@ -41,7 +41,8 @@ export class Ducks {
     // xuống ~130 px, thân dài ~340 px — chứ không chỉ tâm elip tiếp nước; không thì vịt bơi sát mép
     // trên là mất đầu. Màn hẹp quá (điện thoại dọc) thì co về giữa.
     const bb = model?.geometry.boundingBox, c = Math.sqrt(1 - this.squash * this.squash), m = DUCKS.pickMargin * 0.5;
-    const up = bb ? bb.max.y * c * this.scale : 0, down = bb ? -bb.min.y * c * this.scale : 0;
+    // sát mép trên vịt được phóng to nhất (PERSPECTIVE.near) nên đầu cao hơn ngần ấy
+    const up = bb ? bb.max.y * c * this.scale * PERSPECTIVE.near : 0, down = bb ? -bb.min.y * c * this.scale : 0;
     const side = this.contact[0] * 1.1;
     const B = { x0: view.x + m + side, x1: view.x + view.w - m - side, y0: view.y + m + up, y1: view.y + view.h - m - down };
     if (B.x1 < B.x0) B.x0 = B.x1 = view.x + view.w / 2;
@@ -52,7 +53,7 @@ export class Ducks {
     let it_mesh = null;
     for (let k = 0; k < (model ? DUCKS.count : 0); k++) {
       const mat = duckMaterial(model, ambGain);
-      bindFloater(mat, { sim, centre, squash: this.squash }); // lưới sóng + khung nhìn, để phần nổi bị gợn sóng bẻ lệch
+      bindFloater(mat, { sim, centre, squash: this.squash, net, reduceMotion }); // lưới sóng + khung nhìn + lưới sóng trắng phủ phần nổi
       mat.uniforms.uPhase.value = rand(0, TAU); // hai con không quẫy đồng nhịp
       const mesh = new THREE.Mesh(this.geo, mat);
       // Thứ tự vẽ (renderOrder) do scene.js xếp theo trục y chung với lá, đặt trên MESH chứ không trên
@@ -101,15 +102,21 @@ export class Ducks {
   headingOf(vx, vy) { return Math.atan2(vy / this.squash, vx); }
   dirOf(head) { return [Math.cos(head), Math.sin(head) * this.squash]; }
 
+  // Mép dưới của mặt nước tại x (cung SURFACE.arc) — vịt không bơi xuống vùng nước sâu.
+  zoneBottom(x) { return surfaceBottom(x) - DUCKS.zoneMargin; }
+
   pickGoal(it) {
     const B = this.bounds, m = DUCKS.pickMargin * 0.5; // đích lùi vào trong biên thêm chút nữa
     const gx0 = Math.min(B.x0 + m, (B.x0 + B.x1) / 2), gx1 = Math.max(B.x1 - m, (B.x0 + B.x1) / 2);
     const gy0 = Math.min(B.y0 + m, (B.y0 + B.y1) / 2), gy1 = Math.max(B.y1 - m, (B.y0 + B.y1) / 2);
-    for (let i = 0; i < 24; i++) {
-      const gx = rand(gx0, gx1), gy = rand(gy0, gy1);
+    for (let i = 0; i < 40; i++) {
+      const gx = rand(gx0, gx1), yb = Math.min(gy1, this.zoneBottom(gx) - m);
+      if (yb <= gy0) continue; // chỗ này mặt nước quá hẹp
+      const gy = rand(gy0, yb);
       if (Math.hypot(gx - it.x, gy - it.y) >= DUCKS.minTrip) { it.goal = [gx, gy]; return; }
     }
-    it.goal = [rand(gx0, gx1), rand(gy0, gy1)];
+    const gx = rand(gx0, gx1);
+    it.goal = [gx, Math.min(rand(gy0, gy1), this.zoneBottom(gx))];
   }
 
   /* -------------------------------------------------------------- vòng lặp */
@@ -134,7 +141,7 @@ export class Ducks {
     const minD0 = (this.contact[0] + this.contact[1]) * 1.5, kY = 0.8;
     for (let i = 0; i < this.items.length; i++) for (let j = i + 1; j < this.items.length; j++) {
       const p = this.items[i], q = this.items[j];
-      const minD = minD0 * (depthScale(p.y, this.V) + depthScale(q.y, this.V)) * 0.5;
+      const minD = minD0 * (this.persp.S(p.x, p.y) + this.persp.S(q.x, q.y)) * 0.5;
       const dx = q.x - p.x, dy = (q.y - p.y) * kY, d = Math.hypot(dx, dy) || 1;
       if (d >= minD) continue;
       const ux = dx / d, uy = (dy / d) / kY, gap = minD - d;
@@ -166,7 +173,7 @@ export class Ducks {
         it.head = wrap(it.head + Math.sign(turn) * Math.min(Math.abs(turn), DUCKS.turnRate * dt));
         const [ux, uy] = this.dirOf(it.head);
         const ease = Math.max(0.15, Math.cos(Math.min(Math.abs(turn), Math.PI) * 0.5));
-        const ps = depthScale(it.y, this.V); // xa (thấp trên màn hình) thì bơi chậm hơn trên màn hình
+        const ps = this.persp.S(it.x, it.y); // xa (thấp trên màn hình) thì bơi chậm hơn trên màn hình
         wantX = ux * DUCKS.speed * ease * ps;
         wantY = uy * DUCKS.speed * ease * ps;
       }
@@ -190,6 +197,8 @@ export class Ducks {
     if (it.x > B.x1) { it.x = B.x1; it.vx = -Math.abs(it.vx); }
     if (it.y < B.y0) { it.y = B.y0; it.vy = Math.abs(it.vy); }
     if (it.y > B.y1) { it.y = B.y1; it.vy = -Math.abs(it.vy); }
+    const yb = this.zoneBottom(it.x); // không trôi xuống vùng nước sâu dưới cung mặt nước
+    if (it.y > yb) { it.y = yb; it.vy = -Math.abs(it.vy); }
 
     // Quẫy chân mạnh nhẹ theo tốc độ bơi: đứng nghỉ thì chỉ khẽ đạp giữ thăng bằng.
     const wantPaddle = DUCK_MODEL.paddle * (0.3 + 0.7 * Math.min(1, sp / DUCKS.speed)) * (this.reduceMotion ? 0.4 : 1);
@@ -218,7 +227,7 @@ export class Ducks {
     it.wake -= dt;
     if (sp > DUCKS.wakeMinSpeed && it.wake <= 0 && !this.reduceMotion) {
       it.wake = DUCKS.wakeEvery;
-      const r = this.contact[0], ri = r * depthScale(it.y, this.V); // ri: lùi sau đuôi theo px ảnh; r: bán kính trên mặt nước
+      const r = this.contact[0], ri = r * this.persp.S(it.x, it.y); // ri: lùi sau đuôi theo px ảnh; r: bán kính trên mặt nước
       const ux = it.vx / sp, uy = it.vy / sp;
       const amt = Math.min(1, sp / DUCKS.speed) * DUCKS.wakeGain;
       sim.disturb(it.x - ux * ri, it.y - uy * ri, r * 0.6, -amt);
@@ -321,7 +330,8 @@ export class Ducks {
     const z = Z.duck + it.y * 0.004;
     const kp = (CAMERA.D - z) / CAMERA.D;
     it.root.position.set((it.x - this.centre[0]) * kp, -(it.y - this.centre[1]) * kp, z);
-    it.root.scale.setScalar(this.scale * kp * depthScale(it.y, this.V)); // phối cảnh theo y
+    it.root.scale.setScalar(this.scale * kp * this.persp.S(it.x, it.y)); // phối cảnh: cao hơn / ra hai bên thì to hơn
+    it.root.rotation.z = -this.persp.lean(it.x, it.y) * PERSPECTIVE.lean; // ngả theo tia về điểm tụ, như vòng sóng quanh nó
     it.mat.uniforms.uKp.value = kp; // shader cần để quy toạ độ thế giới về toạ độ ảnh
   }
 
@@ -334,7 +344,7 @@ export class Ducks {
   // Hình bầu dục tiếp nước, để lá không trôi xuyên qua vịt.
   bodies() {
     return this.items.map((it) => {
-      const ps = depthScale(it.y, this.V), a = this.contact[0] * ps, b = this.contact[1] * ps;
+      const ps = this.persp.S(it.x, it.y), a = this.contact[0] * ps, b = this.contact[1] * ps;
       const ch = Math.abs(Math.cos(it.head)), sh = Math.abs(Math.sin(it.head));
       return { cx: it.x, cy: it.y, rx: a * ch + b * sh, ry: (a * sh + b * ch) * this.squash };
     });
@@ -348,7 +358,7 @@ export class Ducks {
     const c = Math.sqrt(1 - this.squash * this.squash); // cos của góc nghiêng 23°
     const [a, b] = this.contact;
     for (let k = this.items.length - 1; k >= 0; k--) {
-      const it = this.items[k], ps = depthScale(it.y, this.V);
+      const it = this.items[k], ps = this.persp.S(it.x, it.y);
       const dx = ix - it.x, dy = iy - it.y;
       const ch = Math.abs(Math.cos(it.head)), sh = Math.abs(Math.sin(it.head));
       const halfW = (a * ch + b * sh) * 1.15 * ps, ry = (a * sh + b * ch) * this.squash * ps;
@@ -371,7 +381,7 @@ export class Ducks {
   moveHeld(k, ix, iy) {
     const it = this.items[k], B = this.bounds;
     it.tx = Math.max(B.x0, Math.min(B.x1, ix + it.grabX));
-    it.ty = Math.max(B.y0, Math.min(B.y1, iy + it.grabY));
+    it.ty = Math.max(B.y0, Math.min(B.y1, this.zoneBottom(it.tx), iy + it.grabY));
   }
 
   release(k) {

@@ -1,19 +1,30 @@
 // Mô phỏng sóng trên lưới chiều cao (CPU). Sóng lan truyền, chồng lên nhau, dội lại quanh vùng
 // tiếp nước của vịt và tắt dần ở mép vùng tương tác. Toạ độ vào/ra là px ảnh.
 //
-// Lưới nằm trên MẶT PHẲNG NƯỚC nhìn xiên CÓ PHỐI CẢNH (persp.js), không nằm trên màn hình: ô vuông
-// đều trên (X, Y) của mặt nước nên phép sóng đẳng hướng (vòng sóng tròn trên mặt nước); lên màn hình
-// vòng sóng thành elip dẹt và càng xuống dưới (xa) càng nhỏ — cùng quy luật phối cảnh với vịt và lá.
+// Lưới nằm trên MẶT PHẲNG NƯỚC nhìn xiên CÓ PHỐI CẢNH (persp.js, bán kính quanh điểm tụ dưới màn hình),
+// không nằm trên màn hình: ô vuông đều trên (X, Y) của mặt nước nên phép sóng đẳng hướng (vòng sóng tròn
+// trên mặt nước); lên màn hình vòng sóng thành elip dẹt, càng xuống dưới (xa) càng nhỏ và ở hai bên xoay
+// theo tia về điểm tụ — cùng quy luật phối cảnh với vịt và lá. Lưới chỉ phủ tới dưới mép mặt nước
+// (SURFACE.arc) một quãng, không phủ phần nước sâu (scene.js cắt `world` trước khi dựng).
 // Mọi chỗ đổi px ảnh ↔ ô đều qua persp.toPlane / toImage; bán kính truyền vào disturb/stamp là bán kính
 // TRÊN MẶT NƯỚC (bằng px ảnh ở chỗ S = 1).
 import * as THREE from 'three';
 import { SIM } from './config.js';
 
-// Khung bao của vùng `world` (toạ độ ảnh) trên mặt phẳng nước: X rộng nhất ở hàng dưới cùng (S nhỏ nhất).
+// Khung bao của vùng `world` (toạ độ ảnh) trên mặt phẳng nước. Phép chiếu bán kính không còn affine với ảnh
+// (Y lớn nhất ở GIỮA mép dưới, không phải ở góc) nên quét dọc cả bốn cạnh chứ không chỉ bốn góc.
 function planeBox(world, persp) {
-  const yb = world.y + world.h;
-  const X0 = persp.toPlane(world.x, yb)[0], X1 = persp.toPlane(world.x + world.w, yb)[0];
-  const Y0 = persp.toPlane(0, world.y)[1], Y1 = persp.toPlane(0, yb)[1];
+  let X0 = Infinity, X1 = -Infinity, Y0 = Infinity, Y1 = -Infinity;
+  const take = (x, y) => {
+    const [X, Y] = persp.toPlane(x, y);
+    if (X < X0) X0 = X; if (X > X1) X1 = X; if (Y < Y0) Y0 = Y; if (Y > Y1) Y1 = Y;
+  };
+  const n = 64, xe = world.x + world.w, ye = world.y + world.h;
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    take(world.x + world.w * t, world.y); take(world.x + world.w * t, ye);
+    take(world.x, world.y + world.h * t); take(xe, world.y + world.h * t);
+  }
   return { X0, X1, Y0, Y1, w: X1 - X0, h: Y1 - Y0 };
 }
 
@@ -51,26 +62,20 @@ export class WaterSim {
     this.texture.needsUpdate = true;
   }
 
-  // Mép vùng tương tác: `path` (Path2D, toạ độ ảnh). Lưới không còn là lưới affine của ảnh nên không vẽ
-  // thẳng path lên lưới được: vẽ path vào một canvas ảnh thu nhỏ rồi tra từng ô qua persp.toImage.
-  // Trong vùng tắt dần chậm, ngoài tắt rất nhanh; sát mép lưới có lớp hút sóng (SIM.sponge).
-  setShore(path, world) {
-    const { cols, rows, cell, persp } = this, K = 4; // 1 px canvas = K px ảnh
-    const c = document.createElement('canvas');
-    c.width = Math.ceil(world.w / K); c.height = Math.ceil(world.h / K);
-    const g = c.getContext('2d', { willReadFrequently: true });
-    g.setTransform(1 / K, 0, 0, 1 / K, -world.x / K, -world.y / K);
-    g.filter = 'blur(2px)';
-    g.fillStyle = '#fff';
-    g.fill(path);
-    const a = g.getImageData(0, 0, c.width, c.height).data;
-    const sp = Math.max(1, SIM.sponge / cell); // bề dày lớp hút sóng, theo ô
+  // Mép vùng mặt nước: `inside(x, y)` trả về khoảng cách (px ảnh) từ điểm ảnh tới mép, dương = trong vùng
+  // (scene.js đưa `surfaceBottom(x) − y`). Trong `SIM.shoreBand` px cuối trước mép, hệ số tắt dần hạ MƯỢT
+  // (smoothstep) từ damp xuống dampShore; ngoài mép giữ dampShore. Đổi đột ngột ở mép (bản trước rasterize
+  // path với blur 2 px) là một bức tường: hút một phần, DỘI một phần — vòng sóng đập vào cung phía dưới rồi
+  // phản lại. Dải hút rộng ~40 ô thì sóng tắt dần trong dải (0,93 trung bình mỗi bước × ~70 bước) trước khi
+  // tới chỗ tắt mạnh, không có mặt phản xạ. Sát mép lưới còn lớp hút sóng riêng (SIM.sponge).
+  setShore(inside) {
+    const { cols, rows, cell, persp } = this;
+    const sp = Math.max(1, SIM.sponge / cell), band = Math.max(1, SIM.shoreBand); // bề dày lớp hút sóng ở mép lưới (ô) và dải hút ở mép vùng (px ảnh)
     for (let gy = 0; gy < rows; gy++) for (let gx = 0; gx < cols; gx++) {
       const i = gy * cols + gx;
       const [x, y] = persp.toImage(this.ox + (gx + 0.5) * cell, this.oy + (gy + 0.5) * cell);
-      const px = Math.floor((x - world.x) / K), py = Math.floor((y - world.y) / K);
-      const k = px >= 0 && py >= 0 && px < c.width && py < c.height ? a[(py * c.width + px) * 4 + 3] / 255 : 0;
-      let d = SIM.dampShore + (SIM.damp - SIM.dampShore) * k * k;
+      const t = Math.min(1, Math.max(0, inside(x, y) / band)), k = t * t * (3 - 2 * t);
+      let d = SIM.dampShore + (SIM.damp - SIM.dampShore) * k;
       // càng sát mép lưới càng tắt nhanh, hạ mượt (smoothstep) để chính chỗ đổi hệ số không dội sóng
       const e = Math.min(gx, gy, cols - 1 - gx, rows - 1 - gy) / sp;
       if (e < 1) { const t = e * e * (3 - 2 * e); d *= SIM.dampEdge / SIM.damp + (1 - SIM.dampEdge / SIM.damp) * t; }

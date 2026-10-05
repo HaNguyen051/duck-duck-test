@@ -1,14 +1,18 @@
-// Dựng cảnh ao vịt tràn màn hình: renderer, camera chiếu lệch tâm, vòng lặp.
+// Dựng cảnh ao vịt tràn màn hình: renderer, camera chiếu lệch tâm, vòng lặp. Nền là tranh vòm cây nhìn từ đáy
+// hồ lên (gói art 10/2026): mặt nước là vùng trên cung SURFACE.arc, dưới là nước sâu có bong bóng và sao.
 // Khung nhìn (toạ độ ảnh) phủ kín màn hình theo kiểu cover; đổi cỡ màn hình thì dựng lại cảnh.
 import * as THREE from 'three';
-import { CAMERA, SIM, Z, AMBIENT_GAIN, LAYOUT, PERSPECTIVE, computeView } from './config.js';
+import { CAMERA, SIM, Z, AMBIENT_GAIN, LAYOUT, PERSPECTIVE, SURFACE, computeView, surfacePath, surfaceBottom } from './config.js';
 import { Persp } from './persp.js';
-import { prepareAssets, buildWater, makeTexture } from './assets.js';
+import { prepareAssets, dataTexture } from './assets.js';
 import { WaterSim, cellFor } from './watersim.js';
 import { createWater } from './water.js';
 import { Leaves } from './leaves.js';
 import { Ducks } from './ducks.js';
 import { Drops } from './drops.js';
+import { Bubbles } from './bubbles.js';
+import { Sparkles } from './sparkles.js';
+import { PondAudio } from './audio.js';
 
 const rand = (a, b) => a + Math.random() * (b - a);
 
@@ -29,8 +33,9 @@ export class Pond {
     this.frozen = !!opts.freeze;
     this.pathCtx = document.createElement('canvas').getContext('2d');
     this.ambGain = (this.reduceMotion ? 0.35 : 1) * AMBIENT_GAIN;
+    this.audio = new PondAudio(); // tạo một lần (không theo build): nhạc nền chạy xuyên qua các lần dựng lại cảnh
 
-    renderer.setClearColor(0x1d4e86, 1);
+    renderer.setClearColor(0x0b3147, 1);
     this.camera = new THREE.PerspectiveCamera();
     this.cam = { x: 0, y: 0, tx: 0, ty: 0 };
     this.lastInput = -100;
@@ -68,25 +73,29 @@ export class Pond {
     this.scene = new THREE.Scene();
 
     const sq = this.assets.duck.squash; // độ ép dẹt của mặt nước nhìn xiên, đo từ tranh
-    // phép chiếu ảnh ↔ mặt phẳng nước có phối cảnh: lưới sóng, vịt, lá cùng dùng
-    const persp = (this.persp = new Persp(view, sq, PERSPECTIVE.near, PERSPECTIVE.far));
-    const sim = (this.sim = new WaterSim(world, cellFor(world, view.s, persp), persp));
-    // mép vùng tương tác lấy từ layer "interactive water" trong file AI
-    sim.setShore(this.assets.interactive.path, world);
+    // phép chiếu ảnh ↔ mặt phẳng nước có phối cảnh (bán kính): lưới sóng, vịt, lá, lưới sóng trắng cùng dùng
+    const persp = (this.persp = new Persp(view, sq, PERSPECTIVE.near, PERSPECTIVE.far, PERSPECTIVE.radial));
+    // vùng mặt nước = bên trên cung SURFACE.arc (đo từ gói art); phần nước sâu phía dưới không có sóng
+    this.zonePath = surfacePath(world);
+    // lưới sóng chỉ cần phủ mặt nước + một quãng dưới mép cho lớp hút sóng: cắt bớt phần nước sâu, đỡ tốn ô
+    let arcMax = -Infinity;
+    for (let i = 0; i <= 32; i++) arcMax = Math.max(arcMax, surfaceBottom(world.x + (world.w * i) / 32));
+    const simWorld = { x: world.x, y: world.y, w: world.w, h: Math.min(world.h, arcMax + SIM.sponge + 80 - world.y) };
+    const sim = (this.sim = new WaterSim(simWorld, cellFor(simWorld, view.s, persp), persp));
+    sim.setShore((x, y) => surfaceBottom(x) - y); // dải hút sóng mượt phía trên cung, không dội
 
-    const water = buildWater(this.assets, world);
-    this.waterTex = makeTexture(water.canvas);
-    this.water = createWater({ waterTexture: this.waterTex, region: water.region, area: world, sim, reduceMotion: this.reduceMotion });
+    this.zone = this.makeZone(world);
+    this.water = createWater({ bg: this.assets.bg, net: this.assets.net, zone: this.zone, area: world, sim, reduceMotion: this.reduceMotion });
     this.water.mesh.position.set(world.x + world.w / 2 - this.CX, -(world.y + world.h / 2 - this.CY), 0);
     this.scene.add(this.water.mesh);
 
     const place = this.place, scene = this.scene;
     this.leaves = new Leaves({
       models: this.assets.leaves, scene, view, sim, persp, centre: [this.CX, this.CY], squash: sq,
-      ambGain: this.ambGain, reduceMotion: this.reduceMotion,
+      ambGain: this.ambGain, reduceMotion: this.reduceMotion, net: this.assets.net,
     });
     this.ducks = new Ducks({
-      scene, view, world, sim, persp, ambGain: this.ambGain, reduceMotion: this.reduceMotion,
+      scene, view, world, sim, persp, ambGain: this.ambGain, reduceMotion: this.reduceMotion, net: this.assets.net,
       squash: this.assets.duck.squash, centre: [this.CX, this.CY], model: this.assets.duck.model,
       // vịt rũ nước: bắn giọt quanh nó và gợn mặt nước
       splash: (ix, iy, n) => {
@@ -94,19 +103,45 @@ export class Pond {
         this.sim.disturb(ix, iy, Math.max(14, this.screenPx(16)), -1.4);
       },
     });
-    const inWorld = (d) => d.cx > world.x && d.cx < world.x + world.w && d.cy > world.y && d.cy < world.y + world.h;
+    // giọt lơ lửng của tranh cũ không còn (nền mới có bong bóng); chỉ giữ tia nước bắn lên khi chạm / vịt rũ
     const splash = [...this.assets.drops].sort((a, b) => b.area - a.area).slice(0, 10);
-    this.drops = new Drops({ floating: this.assets.drops.filter(inWorld), splash, scene, place, reduceMotion: this.reduceMotion });
+    this.drops = new Drops({ floating: [], splash, scene, place, reduceMotion: this.reduceMotion });
+    const A = this.assets;
+    this.bubbles = A.bubbles.length && A.spark ? new Bubbles({ textures: A.bubbles, spark: A.spark, scene, place, view, reduceMotion: this.reduceMotion }) : null;
+    this.sparkles = A.spark ? new Sparkles({ texture: A.spark, scene, place, view, reduceMotion: this.reduceMotion }) : null;
 
     if (this.opts.debug) this.setupDebug();
     this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.setSize(cw, ch, false);
   }
 
+  // Mặt nạ vùng mặt nước cho shader: canvas thu nhỏ phủ `world`, đen ngoài, trắng trong, mép làm mờ cỡ
+  // SURFACE.fade px. Vẽ trên nền đen đục rồi đọc kênh r (canvas trong suốt thì r bị nhân sẵn alpha, đọc sai).
+  makeZone(world) {
+    const K = 4, c = document.createElement('canvas');
+    c.width = Math.ceil(world.w / K); c.height = Math.ceil(world.h / K);
+    const g = c.getContext('2d');
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, c.width, c.height);
+    const path = new Path2D();
+    path.addPath(this.zonePath, new DOMMatrix().scale(1 / K).translate(-world.x, -world.y));
+    g.filter = `blur(${(SURFACE.fade / K / 2.75).toFixed(1)}px)`;
+    g.fillStyle = '#fff';
+    g.fill(path);
+    const texture = dataTexture(c);
+    // Shader lấy mẫu mặt nạ bằng (ảnh − world)/world.wh với gốc ở MÉP TRÊN; CanvasTexture mặc định flipY = true
+    // (hàng 0 của texture = đáy canvas) → mặt nạ bị lật dọc: dải trên màn hình thành "nước sâu", không có sóng
+    // (người dùng: "sóng nước không lan đến góc phải trên và trái trên"). Tắt flipY cho khớp.
+    texture.flipY = false;
+    return { texture, rect: world };
+  }
+
   teardown() {
     this.scene.traverse((o) => { if (o.isMesh) o.material.dispose(); });
     this.water.mesh.geometry.dispose(); // mặt nước dựng mới mỗi lần; các hình học khác dùng lại
-    this.waterTex.dispose();
+    this.zone.texture.dispose();
+    this.bubbles?.dispose();
+    this.sparkles?.dispose();
     this.sim.dispose();
     if (this.debug) { this.debug.remove(); this.debug = null; }
   }
@@ -149,7 +184,7 @@ export class Pond {
     return { ix: V.x + u * V.w + this.cam.x * f, iy: V.y + v * V.h - this.cam.y * f, u, v };
   }
 
-  inPond(ix, iy) { return this.pathCtx.isPointInPath(this.assets.interactive.path, ix, iy); }
+  inPond(ix, iy) { return this.pathCtx.isPointInPath(this.zonePath, ix, iy); }
 
   pick(clientX, clientY) {
     const qd = this.imageAt(clientX, clientY, Z.duck);
@@ -252,11 +287,13 @@ export class Pond {
     this.ducks.update(t, dt, this.sim, this.pointer);
     this.leaves.avoidDucks(this.ducks.bodies());
     this.drops.update(t, dt, this.sim);
+    this.bubbles?.update(t, dt);
+    this.sparkles?.update(t, dt);
     this.leaves.sync(t, dt, this.sim);
     this.sortLayers();
     this.sim.upload();
     this.updateCamera(dt);
-    this.water.uniforms.uTime.value = t;
+    this.water.update(t);
     this.renderer.render(this.scene, this.camera);
     if (this.debug) this.drawDebug();
 

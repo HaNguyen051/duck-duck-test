@@ -1,6 +1,7 @@
-// Mọi hằng số của ao vịt. Toạ độ "ảnh" là pixel của artboard 1920×1080 (duck-1.ai), trục y hướng xuống.
-// Góc nhìn của cảnh: đứng DƯỚI mặt hồ nhìn lên, nên vịt và lá là nhìn từ dưới bụng.
-// Mặt nước được nối dài ra ngoài khổ artboard (assets.js → buildWater) nên toạ độ có thể âm hoặc > 1920.
+// Mọi hằng số của ao vịt. Toạ độ "ảnh" là pixel của artboard 1920×1080, trục y hướng xuống.
+// Góc nhìn của cảnh: đứng DƯỚI đáy hồ nhìn lên vòm cây và bầu trời (gói art "duck background" 10/2026):
+// mặt nước là "cửa sổ" elip ở giữa-trên có lưới sóng trắng, vịt và lá nổi ở đó; phần dưới màn hình là nước
+// sâu với bong bóng nổi lên, tia nắng và sao lấp lánh. Khung nhìn có thể vượt khổ artboard (nền kéo dài mép).
 
 export const IMG_DIR = 'images-duck-v2/';
 export const MANIFEST = IMG_DIR + 'manifest.json';
@@ -18,14 +19,99 @@ export function computeView(cw, ch) {
 // Lề quanh khung nhìn: cho thị sai camera, và để lớp hút sóng ở mép lưới (SIM.sponge) nằm ngoài màn hình.
 export const LAYOUT = { worldMargin: 150 };
 
-// Phối cảnh theo trục y: nhìn từ dưới hồ lên thì vật ở CAO hơn trên màn hình là vật gần người xem hơn →
-// to hơn; càng xuống thấp (xa) càng nhỏ. Hệ số cỡ ở mép trên và mép dưới khung nhìn, nội suy tuyến tính;
-// áp cho cỡ vẽ, vùng tiếp nước, vùng bấm, va chạm và tốc độ trên màn hình của vịt lẫn lá.
-export const PERSPECTIVE = { near: 1.25, far: 0.6 };
-export function depthScale(y, V) {
-  const t = Math.min(1, Math.max(0, (y - V.y) / V.h));
-  return PERSPECTIVE.near + (PERSPECTIVE.far - PERSPECTIVE.near) * t;
+// Phối cảnh (persp.js): nhìn từ dưới hồ lên thì vật ở CAO hơn trên màn hình là vật gần người xem hơn → to
+// hơn, càng xuống thấp (xa) càng nhỏ; theo file art còn "to dần về 2 bên". near/far là hệ số cỡ ở giữa mép
+// trên / giữa mép dưới khung nhìn; radial: cỡ theo khoảng cách tới điểm tụ dưới màn hình (to ra hai bên), và
+// vật nổi xoay theo tia về điểm tụ nhân `lean` (0 = đứng thẳng). Hệ số áp cho cỡ vẽ, vùng tiếp nước, vùng
+// bấm, va chạm, tốc độ trên màn hình của vịt lẫn lá, và cho lưới sóng (persp.S(x, y)).
+export const PERSPECTIVE = { near: 1.25, far: 0.6, radial: true, lean: 0.6 };
+
+// Nền: tranh vòm cây + 9 lớp hoà trộn mặt nước đã nướng thành một ảnh (tools/bake-bg.py), phủ đúng khổ artboard.
+export const BG = { url: 'images-bg/bg.webp', rect: { x: 0, y: 0, w: 1920, h: 1080 } };
+
+// Vùng MẶT NƯỚC (đo từ "dimension ref" / "mask shape ref" của gói art, toạ độ artboard):
+// - arc: cung vàng "viền mask dùng cho loang nước & hiệu ứng tương tác nước" — bên trên cung là mặt nước
+//   (sóng, vịt, lá, chạm được), bên dưới là nước sâu (bong bóng, tia nắng). Ngoài hai đầu kéo dài thẳng.
+// - ellipse: elip xanh (mask shape) — vùng vẽ lưới sóng trắng; edge: từ bao nhiêu phần bán kính thì mờ dần.
+// - fade: mép mặt nước hoà mềm trong ngần này px (sóng và khúc xạ tắt dần, không có đường cắt).
+export const SURFACE = {
+  arc: [[0, 490], [240, 611], [480, 679], [720, 713], [960, 722], [1200, 705], [1440, 662], [1680, 582], [1920, 437]],
+  ellipse: { cx: 1005, cy: 275, rx: 1050, ry: 513, edge: 0.78 },
+  fade: 110,
+};
+// Mép dưới của mặt nước tại hoành độ x (nội suy tuyến tính trên cung, kéo dài thẳng ngoài hai đầu).
+export function surfaceBottom(x) {
+  const a = SURFACE.arc, n = a.length;
+  let i = 1;
+  while (i < n - 1 && x > a[i][0]) i++;
+  const [x0, y0] = a[i - 1], [x1, y1] = a[i];
+  return y0 + ((x - x0) * (y1 - y0)) / (x1 - x0);
 }
+// Đa giác vùng mặt nước phủ bề ngang `world` (Path2D, toạ độ ảnh): từ trên khung xuống tới cung.
+export function surfacePath(world) {
+  const p = new Path2D(), x0 = world.x, x1 = world.x + world.w, top = world.y - 50, n = 48;
+  p.moveTo(x0, top);
+  p.lineTo(x1, top);
+  for (let i = 0; i <= n; i++) { const x = x1 + ((x0 - x1) * i) / n; p.lineTo(x, surfaceBottom(x)); }
+  p.closePath();
+  return p;
+}
+
+// Lưới sóng trắng (WATER-EFFECT 2.svg — một path dạng mạng, ô là lỗ) phủ trong elip mặt nước. Lấy mẫu TRÊN
+// MẶT PHẲNG NƯỚC (persp.js) nên ô lưới to ở trên, nhỏ dần xuống dưới, nghiêng theo tia về điểm tụ như vòng
+// sóng; trôi chậm và méo theo gợn sóng để không chết cứng.
+export const NET = {
+  url: 'images-bg/net.svg',
+  texW: 2048, // rasterize SVG ở bề ngang này
+  scale: 1400, // một bản lưới rộng ngần này đơn vị mặt nước (= px ảnh ở chỗ S = 1); ô lưới ≈ 8–12 % số này
+  aspect: 1.5, // kéo dọc trên mặt nước: ô lưới trong tranh mẫu bớt dẹt hơn phép chiếu 0,39
+  opacity: 0.42, // phủ trắng (alpha) — trong tranh mẫu lưới là nét trắng nửa trong suốt, thấy cả trên nền trời
+  soft: 0.4, // thêm soft light (thư mục "EFFECTS (soft light)")
+  refract: 60, // lưới méo theo độ dốc mặt nước: độ dốc × ngần này px
+  drift: [14, 10], driftHz: [0.045, 0.031], // trôi chậm trên mặt nước (đơn vị mặt nước, Hz)
+};
+
+// Bong bóng nổi từ đáy lên (bubble-1..3.svg). Ta ở đáy hồ nên lúc mới sinh bóng ở GẦN (to), nổi lên là đi
+// xa dần (nhỏ lại) — ngược với vịt lá trên mặt nước. Chạm "viền tam giác" thì nổ ("bóng chạm đến viền tam
+// giác thì nổ; hiệu ứng bể: dùng spark kết hợp"): tam giác đỉnh ở giữa-dưới, hai cạnh nghiêng ~36°, nên bóng
+// ở giữa nổ sớm (thấp), bóng hai bên nổi cao hơn mới nổ.
+export const BUBBLES = {
+  urls: ['images-bg/bubble-1.svg', 'images-bg/bubble-2.svg', 'images-bg/bubble-3.svg'],
+  max: 7,
+  every: [1.3, 2.8], // giãn cách sinh (giây)
+  rise: [55, 95], // tốc độ nổi (px ảnh/giây)
+  r0: [50, 86], // bán kính lúc sinh (px ảnh)
+  shrink: 0.42, // tới lúc nổ còn ngần này phần bán kính
+  wobble: 16, wobbleHz: [0.35, 0.7], // lắc ngang
+  drift: 12, // trôi dạt ra hai bên (px/giây)
+  z: [120, 40], // độ cao lúc sinh → lúc nổ (thị sai: gần thì trượt nhiều theo camera)
+  alpha: 0.92,
+  pop: { apex: [901, 707], slope: 0.727 }, // viền tam giác: y_nổ(x) = apex.y − |x − apex.x|·slope
+  spark: { url: 'images-bg/spark.svg', dur: 0.55, size: 2.0 }, // tia nổ: to bằng bán kính bóng × size, kéo dài dur giây
+};
+
+// Sao lấp lánh (WATER-SPARK.svg): nhấp nháy rồi đổi chỗ; phần lớn trong vùng trời/mặt nước, vài cái dưới nước sâu.
+export const SPARKLES = { url: 'images-bg/spark.svg', count: 9, size: [18, 50], period: [2.8, 6], on: 1.3, zoneBias: 0.65, z: 30 };
+
+// Âm thanh (audio.js): nhạc nền lặp bắt đầu sau cử chỉ đầu tiên của người dùng (chính sách autoplay), tiếng nổ
+// khi BẤM bong bóng, tiếng vịt quạc khi bấm vịt, tiếng chạm nước khi bấm mặt hồ. Âm lượng theo file: nổ đỉnh 0 dB (ngắn), quạc −2 dB, nhạc −11 dB.
+export const AUDIO = {
+  enabled: true,
+  files: { bg: 'audio/bg.mp3', pop: 'audio/pop.mp3', quack: 'audio/quack.mp3', touch: 'audio/touch.mp3' },
+  master: 1,
+  music: 0.45, // nhạc nền
+  fadeIn: 2.5, // nhạc nền vào êm trong ngần này giây
+  sfx: 0.9,
+  popVolume: 0.7,
+  quackVolume: 0.9,
+  quackMinGap: 0.35, // bấm vịt liên hồi thì mỗi ngần này giây mới quạc một tiếng
+  touchVolume: 0.8, // tiếng chạm nước khi bấm mặt hồ tạo sóng
+  touchMinGap: 0.12,
+};
+
+// Tia nắng lung linh trong nước sâu (ngoài vùng mặt nước): hai dải sin trôi theo phương vuông góc với tia
+// (tia trong tranh từ góc phải trên xuống trái dưới). amp = 0 là tắt.
+export const RAYS = { amp: 0.05, perp: [0.91, 0.42], waves: [[140, 9], [310, -6]] }; // [bước sóng px, tốc độ px/s]
 
 // Lá sen trôi. dir = 1: trái → phải, dir = -1: phải → trái. Lá KHÔNG tự xoay (xoay thì cuống lá sai hướng).
 export const FLOW = { dir: 1, speed: 15, jitter: 3.5, meander: 5 };
@@ -34,11 +120,12 @@ export const LEAVES = {
   areaPerLeaf: 330000, // số lá = diện tích khung nhìn (px ảnh²) / con số này
   minCount: 4,
   maxCount: 9,
-  // Bốn mẫu lá có cỡ gốc rất chênh nhau (lá 2 rộng 672 px, lá 1 chỉ 329 px) nên mỗi mẫu được
-  // chuẩn hoá về cùng bán kính mặt lá `radius`, rồi mới nhân thêm tỉ lệ ngẫu nhiên quanh 1.
+  // Mỗi mẫu lá được chuẩn hoá về cùng bán kính mặt lá `radius`, rồi nhân tỉ lệ ngẫu nhiên. Chỉ có 2 mẫu
+  // (sen_1, sen_2) nên tỉ lệ trải RỘNG và chia đều dải (leaves.js → sizes) để không lá nào trông cùng một
+  // cỡ; lá trôi ra khỏi màn hình thì sinh lại với cỡ mới.
   radius: 84, // người dùng muốn lá nhỏ lại 40% (từ 140)
-  scaleMin: 0.78,
-  scaleMax: 1.26,
+  scaleMin: 0.55,
+  scaleMax: 1.5,
   kFlow: 0.8, // độ bám theo dòng chảy (1/s)
   kWave: 900, // lực sóng đẩy lá theo độ dốc mặt nước
   kCollide: 40, // độ cứng va chạm (1/s²)
@@ -58,6 +145,7 @@ export const DUCKS = {
   restMin: 1.8, // nghỉ giữa hai chặng bơi
   restMax: 5.5,
   pickMargin: 90, // đích bơi cách mép khung nhìn ngần này px ảnh
+  zoneMargin: 30, // và tâm vịt không xuống thấp hơn mép mặt nước (SURFACE.arc) trừ ngần này
   minTrip: 260, // quãng đường tối thiểu mỗi chặng
   dragFollow: 7, // độ bám con trỏ khi đang kéo (1/s)
   bobGain: 0.5,
@@ -136,32 +224,34 @@ export const DUCK_MODEL = {
   diffuse: 0.6,
   normalScale: 0.6, // độ nổi của vân lông từ normal map (0 = tắt)
   // Góc nhìn từ đáy hồ lên: phần NỔI là phần nhìn xuyên qua mặt nước nên mới xỉn màu; phần chìm rõ nét.
-  throughTint: [0.5, 0.56, 0.64], // phần nổi: nhân màu (tuyến tính) ngả xanh xám
-  throughDesat: 0.45, // và bớt bão hoà
+  throughTint: [0.84, 0.9, 0.96], // phần nổi: nhân màu (tuyến tính) — nền mới là trời sáng nên chỉ ngả nhẹ, không tối
+  throughDesat: 0.3, // và bớt bão hoà
+  throughHaze: [0.74, 0.86, 0.97], throughHazeAmt: 0.2, // rồi pha về màu sáng của trời nhìn qua mặt nước
   // phần chìm ngả màu nước theo độ sâu — vịt rất nhẹ: bụng sát mặt nước gần như giữ nguyên, chân mới ngả
   belowTint: [0.86, 0.93, 0.97],
   belowDepth: 220, // ngả đủ ở độ sâu này (px ảnh)
   belowDesat: 0.1,
 };
 
-// Lá sen là 4 model 3D (models/la_1..4.glb) do Tripo sinh từ ảnh lá vẽ, đã qua tools/prepare-leaf.mjs:
+// Lá sen là 2 model 3D (models/sen_1..2.glb) do Tripo sinh từ ảnh lá vẽ, đã qua tools/prepare-leaf.mjs:
 // mặt lá nằm ngang trong mặt phẳng XZ, tâm mặt lá ở gốc, BÁN KÍNH MẶT LÁ = 1, cuống bẻ rủ xuống −Y.
 // Lúc nạp, leaf3d.js phóng bán kính 1 → LEAVES.radius px và đặt mực nước ngay dưới đáy mặt lá
 // (mặt lá nổi hoàn toàn — nhìn xuyên qua mặt nước nên xỉn; cuống chìm, rõ nét).
 export const LEAF_MODEL = {
-  urls: ['models/la_1.glb', 'models/la_2.glb', 'models/la_3.glb', 'models/la_4.glb'],
-  flip: [false, false, false, false], // true: lật lá (mặt +Y thành −Y) nếu model nào có mặt gân ở dưới
+  urls: ['models/sen_1.glb', 'models/sen_2.glb'],
+  flip: [false, false], // true: lật lá (mặt +Y thành −Y) nếu model nào có mặt gân ở dưới
   float: 2, // đáy mặt lá cao hơn mực nước ngần này px
   refract: 200, refractMax: 14, // như vịt
   ambient: 0.6, diffuse: 0.55, normalScale: 0.5, waterEdge: 3,
   // texture lá vốn nhạt (pastel) nên màn nước phủ nhẹ tay hơn vịt, không thì lá xám xịt
-  throughTint: [0.62, 0.68, 0.74], throughDesat: 0.28,
+  throughTint: [0.86, 0.9, 0.94], throughDesat: 0.25, throughHaze: [0.74, 0.86, 0.97], throughHazeAmt: 0.14,
+  netGain: 0.45, // lưới sóng trắng phủ lên mặt lá nhẹ thôi — mặt lá phẳng mà phủ đậm như vịt thì thành loang lổ
   // phần chìm (mép lá trĩu xuống, cuống) ngả màu nước rõ: xanh lam, tối hơn, bớt bão hoà, càng sâu càng rõ
   belowTint: [0.55, 0.78, 0.9], belowDepth: 30, belowDesat: 0.35, // mép lá trĩu chỉ chìm vài px nên dải ngắn, vừa chạm nước đã ngả
 };
 
 // Độ cao z (px ảnh, hướng về phía người xem — ta ở dưới nước nhìn lên).
-export const Z = { stem: -12, water: 0, ring: 0.8, leaf: 20, duck: 86, dropMin: 40, dropMax: 140 };
+export const Z = { stem: -12, water: 0, ring: 0.8, leaf: 20, duck: 86, dropMin: 40, dropMax: 140, spark: 30 };
 
 // Camera chiếu lệch tâm: mặt nước z = 0 luôn đứng yên trong khung.
 export const CAMERA = { D: 1500, max: 210, ease: 4.5 };
@@ -176,7 +266,11 @@ export const SIM = {
   hz: 120,
   damp: 0.9915, // tắt dần nhanh hơn: vịt bơi liên tục nên sóng cũ phải tan kịp
   dampLeaf: 0.95, // thêm tắt dần dưới lá (chỉ mặt lá, không tính cuống)
-  dampShore: 0.82,
+  // Mép vùng mặt nước (cung SURFACE.arc) không phải tường: trong `shoreBand` px ảnh cuối trước khi tới cung, hệ số
+  // tắt dần hạ mượt (smoothstep) từ `damp` xuống `dampShore` nên sóng tắt dần rồi mới chạm mép, không dội lại.
+  // Đổi đột ngột (bản trước: chuyển trong ~16 px) là sóng đập vào "thành" giữa phía dưới rồi phản lại — người dùng chê.
+  dampShore: 0.86,
+  shoreBand: 220,
   // Lớp hút sóng ở mép lưới: mép lưới là tường cứng (ô biên luôn = 0) nên sóng dội ngược vào màn hình,
   // ao đầy sóng chồng chéo. Trong `sponge` px cuối, hệ số tắt dần hạ mượt từ `damp` xuống `dampEdge`
   // để sóng tan trước khi chạm tường — và vì lề thế giới (LAYOUT.worldMargin) rộng hơn, dải này nằm ngoài màn hình.
@@ -184,7 +278,7 @@ export const SIM = {
   dampEdge: 0.86,
 };
 
-// Ánh sáng: mặt trời ngoài khung phía trên bên phải — đo từ chỗ sáng nhất của nuoc.png.
+// Ánh sáng: mặt trời ngoài khung phía trên bên phải — chùm tia nắng trong tranh nền toả từ góc ấy.
 // dir là hướng TỚI nguồn sáng; trong toạ độ ảnh y hướng xuống nên y dương nghĩa là nguồn sáng ở phía trên.
 export const SUN = { img: [1960, -60], dir: [0.86, 0.51, 0.55] };
 

@@ -1,10 +1,10 @@
-// Lá sen: 4 model 3D (leaf3d.js) nhân bản, trôi theo dòng, bị sóng đẩy, va nhau và vòng qua vịt.
-// Mỗi lá là một mesh với vật liệu "vật nổi" dùng chung với vịt (floater.js): mặt lá nổi → nhìn xuyên
-// qua mặt nước nên xỉn và lay theo sóng; cuống chìm → rõ nét. Lá nhấp nhô và nghiêng theo mặt nước.
-// Lá KHÔNG xoay — mọi lá cùng một hướng, cuống đều chĩa xuống phía dưới màn hình như tranh gốc (đã thử
-// cho mỗi lá một góc ngẫu nhiên: người dùng thấy "cuống xiên xỏ đủ hướng", bỏ).
+// Lá sen: 2 model 3D (leaf3d.js) nhân bản với cỡ khác nhau, trôi theo dòng, bị sóng đẩy, va nhau và vòng qua vịt.
+// Mỗi lá là một mesh với vật liệu "vật nổi" dùng chung với vịt (floater.js): lá nổi → nhìn xuyên qua mặt
+// nước nên xỉn và lay theo sóng. Lá nhấp nhô và nghiêng theo mặt nước. Lá KHÔNG xoay — mọi lá cùng một
+// hướng (khe lá chĩa lên phía trên màn hình; đã thử cho mỗi lá một góc ngẫu nhiên: người dùng thấy "xiên xỏ
+// đủ hướng", bỏ). Lá mới (sen_1, sen_2) không có cuống — người dùng muốn giữ đúng model gốc.
 import * as THREE from 'three';
-import { FLOW, LEAVES, Z, CAMERA, depthScale } from './config.js';
+import { FLOW, LEAVES, Z, CAMERA, PERSPECTIVE, surfaceBottom } from './config.js';
 import { leafMaterial } from './leaf3d.js';
 import { bindFloater } from './floater.js';
 import { waveAt } from './water.js';
@@ -14,7 +14,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 export class Leaves {
   // view: khung nhìn (toạ độ ảnh) — lá trôi trong dải này và vòng lại ở hai mép.
-  constructor({ models, scene, view, sim, persp, centre, squash, ambGain, reduceMotion }) {
+  constructor({ models, scene, view, sim, persp, centre, squash, ambGain, reduceMotion, net }) {
     this.V = view;
     this.persp = persp;
     this.centre = centre;
@@ -25,13 +25,17 @@ export class Leaves {
     this.w = { h: 0, gx: 0, gy: 0 };
     const count = models.length ? Math.round(clamp((view.w * view.h) / LEAVES.areaPerLeaf, LEAVES.minCount, LEAVES.maxCount)) : 0;
 
+    // Cỡ lá: chia đều dải [scaleMin, scaleMax] thành `count` khoảng, mỗi lá một khoảng (có lệch ngẫu nhiên trong
+    // khoảng) rồi xáo — thuần ngẫu nhiên hay cho vài lá cùng cỡ, mà chỉ có 2 mẫu lá nên cỡ phải khác nhau rõ.
+    const sizes = Array.from({ length: count }, (_, i) => LEAVES.scaleMin + ((LEAVES.scaleMax - LEAVES.scaleMin) * (i + rand(0.15, 0.85))) / count)
+      .sort(() => Math.random() - 0.5);
     this.items = [];
     this.top = 0;
     for (let k = 0; k < count; k++) {
       const m = models[k % models.length];
-      const s = rand(LEAVES.scaleMin, LEAVES.scaleMax);
+      const s = sizes[k];
       const mat = leafMaterial(m, ambGain);
-      bindFloater(mat, { sim, centre, squash });
+      bindFloater(mat, { sim, centre, squash, net, reduceMotion });
       mat.uniforms.uTint.value.set(rand(0.94, 1.04), rand(0.97, 1.03), rand(0.94, 1.02)); // lệch màu rất nhẹ cho đỡ đều tăm tắp
       const mesh = new THREE.Mesh(m.geometry, mat);
       mesh.frustumCulled = false;
@@ -75,7 +79,7 @@ export class Leaves {
   pickY(leaf, x) {
     let bestY = this.V.y + this.V.h / 2, bestScore = -Infinity;
     for (let i = 0; i < 14; i++) {
-      const y = rand(this.V.y + 60, this.V.y + this.V.h - 60);
+      const y = rand(this.V.y + 60, Math.min(this.V.y + this.V.h - 60, surfaceBottom(x) - 70)); // chỉ trên mặt nước
       const sc = this.clearance(leaf, x, y);
       if (sc > bestScore) { bestScore = sc; bestY = y; }
     }
@@ -98,6 +102,11 @@ export class Leaves {
   }
 
   respawn(p) {
+    // sinh lại với cỡ mới (khác hẳn cỡ cũ) để bộ lá trên màn hình luôn đổi
+    const span = LEAVES.scaleMax - LEAVES.scaleMin;
+    let s = rand(LEAVES.scaleMin, LEAVES.scaleMax);
+    if (Math.abs(s - p.s) < span * 0.25) s = p.s > (LEAVES.scaleMin + LEAVES.scaleMax) / 2 ? LEAVES.scaleMin + rand(0, span * 0.4) : LEAVES.scaleMax - rand(0, span * 0.4);
+    p.s = s; p.r = p.m.radius * s; p.R = p.r;
     p.x = FLOW.dir > 0 ? this.V.x - p.R - rand(0, 40) : this.V.x + this.V.w + p.R + rand(0, 40);
     p.placed = false;
     p.y = this.pickY(p, p.x + FLOW.dir * p.R);
@@ -124,7 +133,7 @@ export class Leaves {
 
   integrate(h, t, sim) {
     const L = this.items, S = this.s, sq = this.squash;
-    for (const p of L) { p.ax = 0; p.ay = 0; p.ps = depthScale(p.y, this.V); }
+    for (const p of L) { p.ax = 0; p.ay = 0; p.ps = this.persp.S(p.x, p.y); }
     for (const p of L) {
       if (p.held) {
         const K = LEAVES.kHold, C = 2 * Math.sqrt(K);
@@ -146,7 +155,7 @@ export class Leaves {
         p.ax -= (gx / 5) * LEAVES.kWave;
         p.ay -= (gy / 5) * LEAVES.kWave * sq; // độ dốc dọc màn hình đã bị ép dẹt, lực trên mặt nước nhỏ lại tương ứng
       }
-      const top = this.V.y + 12, bot = this.V.y + this.V.h - 12;
+      const top = this.V.y + 12, bot = Math.min(this.V.y + this.V.h - 12, surfaceBottom(p.x) - p.r * p.ps * sq - 10); // không trôi xuống nước sâu
       if (p.y < top) p.ay += (top - p.y) * 3;
       if (p.y > bot) p.ay += (bot - p.y) * 3;
     }
@@ -239,7 +248,7 @@ export class Leaves {
 
   moveHeld(p, ix, iy) {
     p.tx = clamp(ix + p.gx, this.V.x - p.R, this.V.x + this.V.w + p.R);
-    p.ty = clamp(iy + p.gy, this.V.y - p.r, this.V.y + this.V.h + p.r);
+    p.ty = clamp(iy + p.gy, this.V.y - p.r, surfaceBottom(p.tx) - p.r * p.ps * this.squash);
   }
 
   release(p, vx, vy) {
@@ -275,8 +284,9 @@ export class Leaves {
       // đặt gốc lá (tâm mặt lá, ngay mực nước) vào toạ độ ảnh, bù thị sai; nhấc lên khi đang kéo
       const z = Z.leaf + p.lift, kp = (CAMERA.D - z) / CAMERA.D;
       p.root.position.set((p.x - this.centre[0]) * kp, -(p.y - this.centre[1]) * kp, z);
-      p.ps = depthScale(p.y, this.V);
-      p.root.scale.setScalar(p.s * kp * p.ps); // phối cảnh theo y: cao hơn trên màn hình thì to hơn
+      p.ps = this.persp.S(p.x, p.y);
+      p.root.scale.setScalar(p.s * kp * p.ps); // phối cảnh: cao hơn trên màn hình / ra hai bên thì to hơn
+      p.root.rotation.z = -this.persp.lean(p.x, p.y) * PERSPECTIVE.lean; // cuống ngả theo tia về điểm tụ
       p.mat.uniforms.uKp.value = kp;
       p.mat.uniforms.uTime.value = t;
     }

@@ -1,5 +1,5 @@
 :root {
-  --deep: #15396a;
+  --deep: #0a2a3c;
   --ink: #e8edf2;
   --ink-2: #a5b1bd;
   --line: #2c343d;
@@ -20,8 +20,8 @@ body {
   position: fixed;
   inset: 0;
   overflow: hidden;
-  /* lót cùng tông nước cho khoảnh khắc trước khi WebGL vẽ xong */
-  background: linear-gradient(#bcd9f3, #4f8cc9 38%, #1d4e86 72%, #0e2f58);
+  /* lót cùng tông với nền mới (trời sáng trên, nước sâu xanh lục dưới) cho khoảnh khắc trước khi WebGL vẽ xong */
+  background: linear-gradient(#9fd3ea, #3aa0b8 40%, #0f4a60 75%, #082634);
   touch-action: none;
   -webkit-user-select: none;
   user-select: none;
@@ -29,6 +29,7 @@ body {
 }
 .pond[data-cursor="grab"] { cursor: grab; }
 .pond[data-cursor="grabbing"] { cursor: grabbing; }
+.pond[data-cursor="pointer"] { cursor: pointer; }
 
 .pond-gl {
   position: absolute;

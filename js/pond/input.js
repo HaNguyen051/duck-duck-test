@@ -1,5 +1,5 @@
-// Chuột / cảm ứng: di chuột để nghiêng cảnh, kéo lá, kéo vịt (vịt quay đầu theo hướng kéo),
-// chạm hoặc vuốt mặt nước để tạo sóng.
+// Chuột / cảm ứng: di chuột để nghiêng cảnh, kéo lá, kéo vịt (vịt quay đầu theo hướng kéo, kêu quạc),
+// bấm bong bóng cho nổ, chạm hoặc vuốt mặt nước để tạo sóng. Cử chỉ đầu tiên mở âm thanh (audio.js).
 import { Z, LEAVES } from './config.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -47,6 +47,7 @@ export class PondInput {
       this.hoverQueued = false;
       const ev = this.hoverEvent;
       if (!ev || this.active) return;
+      if (this.pond.bubbles?.pickAt(ev.clientX, ev.clientY, this.pond)) { this.setCursor('pointer'); return; }
       const q = this.pond.imageAt(ev.clientX, ev.clientY, 0);
       if (!this.pond.inPond(q.ix, q.iy)) { this.setCursor(''); return; }
       const hit = this.pond.pick(ev.clientX, ev.clientY);
@@ -56,6 +57,16 @@ export class PondInput {
 
   onDown(e) {
     if (this.active || (e.button !== undefined && e.button > 0)) return;
+    this.pond.audio?.unlock(); // cử chỉ đầu tiên: mở âm thanh, bật nhạc nền
+    // Bong bóng: bấm là nổ (kèm tiếng nổ). Xét trước vùng mặt nước vì bóng nổi cả ở nước sâu phía dưới.
+    const bubble = this.pond.bubbles?.pickAt(e.clientX, e.clientY, this.pond);
+    if (bubble) {
+      e.preventDefault();
+      this.pond.bubbles.pop(bubble, 1.35);
+      this.pond.audio?.pop();
+      this.pond.touch();
+      return;
+    }
     const q0 = this.pond.imageAt(e.clientX, e.clientY, 0);
     if (!this.pond.inPond(q0.ix, q0.iy)) return;
     e.preventDefault();
@@ -64,6 +75,7 @@ export class PondInput {
     const now = performance.now();
     this.pond.pointerAt(e.clientX, e.clientY);
     if (hit.type === 'duck') {
+      this.pond.audio?.quack(); // bấm vịt: quạc
       this.pond.ducks.grab(hit.index, hit.ix, hit.iy);
       this.active = { id: e.pointerId, mode: 'duck', duck: hit.index };
       this.setCursor('grabbing');
@@ -73,6 +85,7 @@ export class PondInput {
       this.setCursor('grabbing');
     } else {
       this.pond.drop(q0.ix, q0.iy);
+      this.pond.audio?.touch(); // chạm mặt hồ: tiếng nước
       this.active = { id: e.pointerId, mode: 'stir', last: { ...q0, t: now } };
     }
     this.pond.touch();
