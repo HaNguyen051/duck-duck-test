@@ -2,14 +2,13 @@
 // hồ lên (gói art 10/2026): mặt nước là vùng trên cung SURFACE.arc, dưới là nước sâu có bong bóng và sao.
 // Khung nhìn (toạ độ ảnh) phủ kín màn hình theo kiểu cover; đổi cỡ màn hình thì dựng lại cảnh.
 import * as THREE from 'three';
-import { CAMERA, SIM, Z, AMBIENT_GAIN, LAYOUT, PERSPECTIVE, SURFACE, computeView, surfacePath, surfaceBottom } from './config.js';
+import { CAMERA, SIM, Z, AMBIENT_GAIN, LAYOUT, PERSPECTIVE, SURFACE, computeView, surfacePath, surfaceBottom, surfaceInside, BUBBLES, DEEP_FLOW } from './config.js';
 import { Persp } from './persp.js';
 import { prepareAssets, dataTexture } from './assets.js';
 import { WaterSim, cellFor } from './watersim.js';
 import { createWater } from './water.js';
 import { Leaves } from './leaves.js';
 import { Ducks } from './ducks.js';
-import { Drops } from './drops.js';
 import { Bubbles } from './bubbles.js';
 import { Sparkles } from './sparkles.js';
 import { PondAudio } from './audio.js';
@@ -82,7 +81,7 @@ export class Pond {
     for (let i = 0; i <= 32; i++) arcMax = Math.max(arcMax, surfaceBottom(world.x + (world.w * i) / 32));
     const simWorld = { x: world.x, y: world.y, w: world.w, h: Math.min(world.h, arcMax + SIM.sponge + 80 - world.y) };
     const sim = (this.sim = new WaterSim(simWorld, cellFor(simWorld, view.s, persp), persp));
-    sim.setShore((x, y) => surfaceBottom(x) - y); // dải hút sóng mượt phía trên cung, không dội
+    sim.setShore(surfaceInside); // dải hút sóng mượt phía trong mép (đo vuông góc), không dội
 
     this.zone = this.makeZone(world);
     this.water = createWater({ bg: this.assets.bg, net: this.assets.net, zone: this.zone, area: world, sim, reduceMotion: this.reduceMotion });
@@ -97,17 +96,15 @@ export class Pond {
     this.ducks = new Ducks({
       scene, view, world, sim, persp, ambGain: this.ambGain, reduceMotion: this.reduceMotion, net: this.assets.net,
       squash: this.assets.duck.squash, centre: [this.CX, this.CY], model: this.assets.duck.model,
-      // vịt rũ nước: bắn giọt quanh nó và gợn mặt nước
-      splash: (ix, iy, n) => {
-        this.drops.burst(ix, iy, n, 0.9, Math.max(1, Math.sqrt(1 / this.view.s)));
-        this.sim.disturb(ix, iy, Math.max(14, this.screenPx(16)), -1.4);
-      },
+      // vịt rũ nước: chỉ gợn mặt nước — KHÔNG bắn giọt (giọt nước trông như bong bóng lạ, chủ dự án bỏ 2026-10-06)
+      splash: (ix, iy) => { this.sim.disturb(ix, iy, Math.max(14, this.screenPx(16)), -1.4); },
     });
-    // giọt lơ lửng của tranh cũ không còn (nền mới có bong bóng); chỉ giữ tia nước bắn lên khi chạm / vịt rũ
-    const splash = [...this.assets.drops].sort((a, b) => b.area - a.area).slice(0, 10);
-    this.drops = new Drops({ floating: [], splash, scene, place, reduceMotion: this.reduceMotion });
     const A = this.assets;
-    this.bubbles = A.bubbles.length && A.spark ? new Bubbles({ textures: A.bubbles, spark: A.spark, scene, place, view, reduceMotion: this.reduceMotion }) : null;
+    this.bubbles = A.bubbles.length && A.spark ? new Bubbles({
+      textures: A.bubbles, spark: A.spark, scene, place, view, reduceMotion: this.reduceMotion,
+      // bóng của cú bấm vỡ: gợn nhẹ mặt nước ở chỗ vỡ
+      onPop: (x, y, r) => { if (this.inPond(x, y)) this.sim.disturb(x, y, Math.max(6, r * 0.6), -BUBBLES.tap.ripple); },
+    }) : null;
     this.sparkles = A.spark ? new Sparkles({ texture: A.spark, scene, place, view, reduceMotion: this.reduceMotion }) : null;
 
     if (this.opts.debug) this.setupDebug();
@@ -118,15 +115,26 @@ export class Pond {
   // Mặt nạ vùng mặt nước cho shader: canvas thu nhỏ phủ `world`, đen ngoài, trắng trong, mép làm mờ cỡ
   // SURFACE.fade px. Vẽ trên nền đen đục rồi đọc kênh r (canvas trong suốt thì r bị nhân sẵn alpha, đọc sai).
   makeZone(world) {
-    const K = 4, c = document.createElement('canvas');
+    // Ba kênh: r = vùng mặt nước, mép mềm SURFACE.fade (sóng, khúc xạ tắt dần qua mép);
+    // g = cùng vùng nhưng mờ rộng (SURFACE.deepBlur.width) — shader lấy nó để nước sâu nhoè dần qua mép.
+    // K = 2: mặt nạ ½ độ phân giải cho mép mịn.
+    const K = 2, c = document.createElement('canvas');
     c.width = Math.ceil(world.w / K); c.height = Math.ceil(world.h / K);
     const g = c.getContext('2d');
     g.fillStyle = '#000';
     g.fillRect(0, 0, c.width, c.height);
     const path = new Path2D();
     path.addPath(this.zonePath, new DOMMatrix().scale(1 / K).translate(-world.x, -world.y));
-    g.filter = `blur(${(SURFACE.fade / K / 2.75).toFixed(1)}px)`;
-    g.fillStyle = '#fff';
+    g.globalCompositeOperation = 'lighter';
+    g.filter = `blur(${(SURFACE.fade / K / 2.75).toFixed(2)}px)`;
+    g.fillStyle = '#f00';
+    g.fill(path);
+    g.filter = `blur(${(SURFACE.deepBlur.width / K / 2.75).toFixed(2)}px)`;
+    g.fillStyle = '#0f0';
+    g.fill(path);
+    // b = cùng vùng, mờ rất rộng (DEEP_FLOW.ramp): 1 − b là "độ sâu tính từ mép" cho liquify nước sâu
+    g.filter = `blur(${(DEEP_FLOW.ramp / K / 2.75).toFixed(2)}px)`;
+    g.fillStyle = '#00f';
     g.fill(path);
     const texture = dataTexture(c);
     // Shader lấy mẫu mặt nạ bằng (ảnh − world)/world.wh với gốc ở MÉP TRÊN; CanvasTexture mặc định flipY = true
@@ -216,7 +224,7 @@ export class Pond {
   drop(ix, iy) {
     const g = this.reduceMotion ? 0.6 : 1;
     this.sim.disturb(ix, iy, Math.max(14, this.screenPx(17)), -7.5 * g);
-    this.drops.burst(ix, iy, 5, g, Math.max(1, Math.sqrt(1 / this.view.s)));
+    this.bubbles?.spawnAt(ix, iy); // bấm nước: vài bóng nhỏ nổi lên từ chỗ bấm
     this.touch();
   }
 
@@ -286,7 +294,6 @@ export class Pond {
     }
     this.ducks.update(t, dt, this.sim, this.pointer);
     this.leaves.avoidDucks(this.ducks.bodies());
-    this.drops.update(t, dt, this.sim);
     this.bubbles?.update(t, dt);
     this.sparkles?.update(t, dt);
     this.leaves.sync(t, dt, this.sim);

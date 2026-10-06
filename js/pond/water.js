@@ -11,7 +11,7 @@
 // phần dưới là nước sâu, đứng yên, chỉ có tia nắng lung linh. Trong elip mặt nước còn phủ LƯỚI SÓNG TRẮNG
 // (WATER-EFFECT 2.svg) lấy mẫu trên mặt phẳng nước nên ô lưới co theo phối cảnh và méo theo gợn sóng.
 import * as THREE from 'three';
-import { SUN, AMBIENT_WAVES, AMBIENT_GAIN, SURFACE, NET, RAYS } from './config.js';
+import { SUN, AMBIENT_WAVES, AMBIENT_GAIN, SURFACE, NET, RAYS, DEEP_FLOW, FOLIAGE } from './config.js';
 
 // Phép chiếu ảnh ↔ mặt phẳng nước (xem persp.js) và sóng nền, dùng chung cho shader nước và vật nổi.
 // waves(img, t): sóng phẳng trên MẶT PHẲNG NƯỚC tại điểm ảnh img → (chiều cao, đạo hàm theo px ảnh x,
@@ -105,12 +105,27 @@ uniform float uTime, uAmb, uGain, uRefr, uFocus, uFocusTint, uTIR, uShade, uSunG
 uniform vec2 uSun;
 uniform vec3 uRays;    // (biên độ, perp.x, perp.y)
 uniform vec4 uRayW;    // (bước sóng 1, tốc độ 1, bước sóng 2, tốc độ 2)
+uniform float uDeepBlur; // bán kính làm mờ nền ở nước sâu (px ảnh) — xem bước 1
+uniform vec4 uFlow;      // liquify nước sâu: (méo tối đa px, cỡ xoáy px, tốc độ, độ cuộn) — DEEP_FLOW
+uniform sampler2D uFoliage; // mặt nạ cây (assets.js → foliageMask): r = trường dời, g = mờ rộng (để tìm ngọn)
+uniform vec4 uFoliageA;  // (dời tối đa px, tần số góc, cơn gió amt, 1/khoảng cách cơn gió s)
+uniform vec2 uFoliageC;  // tâm khoảng trời (toạ độ ảnh)
+uniform vec4 uFlowB;     // (tia nắng uốn px, mảng sáng ±, cỡ mảng px, tốc độ mảng)
+// Value noise mượt + fbm 2 tầng cho dòng chảy nước sâu.
+float flowHash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float flowNoise(vec2 p){
+  vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(flowHash(i), flowHash(i + vec2(1.0, 0.0)), u.x), mix(flowHash(i + vec2(0.0, 1.0)), flowHash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float flowFbm(vec2 p){ return 0.65 * flowNoise(p) + 0.35 * flowNoise(p * 2.03 + 17.1); }
 varying vec2 vImg;
 ${WAVES_GLSL}
 ${NET_GLSL}
 
 void main(){
-  float zone = texture2D(uZone, (vImg - uZoneRect.xy) / uZoneRect.zw).r; // 1 = mặt nước, 0 = nước sâu
+  vec3 zm = texture2D(uZone, (vImg - uZoneRect.xy) / uZoneRect.zw).rgb;
+  float zone = zm.r; // 1 = mặt nước, 0 = nước sâu (sóng, khúc xạ tắt dần qua mép)
+  float deep = 1.0 - zm.g; // cùng vùng, chuyển rộng hơn: độ mờ của nước sâu tăng dần qua mép, không có đường ranh
   vec2 g = (planeOf(vImg) - uSimOrigin) / (uGrid * uCell); // toạ độ texture lưới sóng tại điểm ảnh này
   // lấy mẫu cách 1,5 ô: nội suy song tuyến làm mượt, không lộ ô lưới
   vec2 tx = 1.5 / uGrid;
@@ -130,8 +145,36 @@ void main(){
 
   // 1) khúc xạ: từ dưới nhìn lên, cảnh phía trên bị mặt nước bẻ lệch theo độ dốc
   vec2 p = vImg - G * uRefr;
+  // 1b) liquify nước sâu: nền uốn lượn chậm theo dòng chảy cuộn (domain warp — nhiễu dời toạ độ của chính
+  // nó nên xoáy chứ không trôi thẳng). Nặng dần từ mép xuống sâu (kênh b), trên mặt nước = 0 (deep = 0).
+  vec2 fq = vImg / uFlow.y + uTime * uFlow.z;
+  vec2 warp = vec2(flowFbm(fq + uFlow.w * flowFbm(fq + vec2(3.1, 7.7)) + uTime * 0.013),
+                   flowFbm(fq + uFlow.w * flowFbm(fq + vec2(9.4, 1.3)) - uTime * 0.011)) * 2.0 - 1.0;
+  float wDeep = deep * mix(0.5, 1.0, 1.0 - zm.b);
+  p += warp * uFlow.x * wDeep;
+  // 1c) tán cây trong nền đung đưa theo gió: chỉ chỗ mặt nạ cây (trời mây đứng yên), lắc theo phương tiếp tuyến
+  // quanh tâm khoảng trời; ngọn (rìa khối cây vươn ra trời) lắc đủ, lõi và gốc ~25 %; các cụm lệch pha theo nhiễu
+  // không gian; thỉnh thoảng một cơn gió mạnh hơn. Trường dời mượt (mặt nạ đã làm mờ) nên ảnh uốn liền, không rách.
+  vec2 fuv = (p - uBgRect.xy) / uBgRect.zw;
+  vec2 fm = texture2D(uFoliage, vec2(fuv.x, 1.0 - fuv.y)).rg; // cùng quy ước lật dọc với uBg
+  vec2 rc = p - uFoliageC;
+  vec2 ftan = vec2(-rc.y, rc.x) / max(length(rc), 1.0);
+  float fph = flowNoise(p / 350.0) * 6.2831853;
+  float sway = sin(uTime * uFoliageA.y + fph) * 0.75 + sin(uTime * uFoliageA.y * 1.7 + fph * 1.3) * 0.25;
+  float gust = 1.0 + uFoliageA.z * smoothstep(0.55, 0.9, flowNoise(vec2(uTime * uFoliageA.w, 0.5)));
+  p += ftan * uFoliageA.x * fm.r * (0.25 + 0.75 * (1.0 - fm.g)) * sway * gust;
   vec2 buv = (p - uBgRect.xy) / uBgRect.zw;
-  vec3 c = texture2D(uBg, vec2(buv.x, 1.0 - buv.y)).rgb;
+  // Nước sâu nhìn qua một lớp nước dày nên hơi nhoè: làm mờ Gauss 3×3 (trọng số 4-2-1) bán kính tăng dần qua
+  // mép — mặt nước giữ nét, nước sâu mờ ~1–2 px. Chỗ chuyển là chính độ mờ, KHÔNG vẽ đường viền (chủ dự án
+  // bác vệt sáng/dải tối dọc mép: "vẽ cái đường đấy thì không còn chân thật"). Lấy mẫu vô điều kiện.
+  vec2 bo = vec2(1.0, -1.0) * uDeepBlur * deep / uBgRect.zw;
+  vec2 bu = vec2(buv.x, 1.0 - buv.y);
+  vec3 c = texture2D(uBg, bu).rgb * 4.0
+    + (texture2D(uBg, bu + vec2(bo.x, 0.0)).rgb + texture2D(uBg, bu - vec2(bo.x, 0.0)).rgb
+     + texture2D(uBg, bu + vec2(0.0, bo.y)).rgb + texture2D(uBg, bu - vec2(0.0, bo.y)).rgb) * 2.0
+    + texture2D(uBg, bu + bo).rgb + texture2D(uBg, bu - bo).rgb
+    + texture2D(uBg, bu + vec2(bo.x, -bo.y)).rgb + texture2D(uBg, bu - vec2(bo.x, -bo.y)).rgb;
+  c /= 16.0;
 
   // 2) tụ sáng: đây là thứ tạo ra hình sóng khi nhìn từ dưới lên.
   // Mặt cong lõm gom tia sáng lại -> vệt chói; cong lồi thì xoè ra -> tối.
@@ -150,9 +193,14 @@ void main(){
   c = mix(c, c * vec3(0.62, 0.70, 0.80), steep);
 
   // 5) nước sâu: tia nắng lung linh — hai dải sin trôi theo phương vuông góc với tia
-  float u = dot(vImg, uRays.yz);
+  // ở nước sâu tia uốn lượn theo cùng dòng chảy liquify (dời toạ độ theo warp), trên mặt nước giữ thẳng
+  float u = dot(vImg + warp * uFlowB.x * wDeep, uRays.yz);
   float ray = sin(u / uRayW.x + uTime * uRayW.y) * 0.6 + sin(u / uRayW.z - uTime * uRayW.w) * 0.4;
   c *= 1.0 + uRays.x * ray * (1.0 - 0.7 * zone);
+  // 5c) nước sâu: mảng sáng tối to, rất mờ, loang chậm — nắng xuyên mặt nước dao động. Không có nét.
+  vec2 pq = vImg / uFlowB.z + vec2(uTime * uFlowB.w, -uTime * uFlowB.w * 0.7);
+  float patchL = flowFbm(pq + 0.8 * flowFbm(pq * 0.7 + vec2(5.2, 2.9) + uTime * uFlowB.w * 0.5)) * 2.0 - 1.0;
+  c *= 1.0 + uFlowB.y * patchL * wDeep * 2.0;
 
   // 6) lưới sóng trắng trong elip mặt nước (NET_GLSL), méo theo gợn sóng
   c = applyNet(c, netAt(vImg, G, uTime));
@@ -163,7 +211,11 @@ void main(){
 
 // Uniform của lưới sóng trắng cho một vật liệu (nước hoặc vật nổi). net = { texture, aspect } hoặc null (không
 // có lưới: texture 1×1 trong suốt, độ phủ 0). reduceMotion: trôi chậm lại.
-let emptyNet = null;
+let emptyNet = null, black = null;
+const blackTex = () => {
+  if (!black) { black = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); black.needsUpdate = true; }
+  return black;
+};
 export function netUniforms(net, reduceMotion) {
   if (!net && !emptyNet) {
     emptyNet = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
@@ -185,6 +237,9 @@ export function createWater({ bg, net, zone, area, sim, reduceMotion }) {
   const uniforms = {
     ...netUniforms(net, reduceMotion),
     uBg: { value: bg.texture },
+    uFoliage: { value: bg.foliage ? bg.foliage.texture : blackTex() },
+    uFoliageA: { value: new THREE.Vector4(bg.foliage ? FOLIAGE.amp * (reduceMotion ? 0.5 : 1) : 0, 6.2831853 / FOLIAGE.period, FOLIAGE.gust.amt, 1 / FOLIAGE.gust.every) },
+    uFoliageC: { value: new THREE.Vector2(FOLIAGE.centre[0], FOLIAGE.centre[1]) },
     uBgRect: { value: new THREE.Vector4(bg.rect.x, bg.rect.y, bg.rect.w, bg.rect.h) },
     uHeight: { value: sim.texture },
     uZone: { value: zone.texture },
@@ -208,6 +263,9 @@ export function createWater({ bg, net, zone, area, sim, reduceMotion }) {
     uShade: { value: 0.025 },
     uSunGain: { value: 0.8 },
     uSun: { value: new THREE.Vector2(SUN.img[0], SUN.img[1]) },
+    uDeepBlur: { value: SURFACE.deepBlur.px },
+    uFlow: { value: new THREE.Vector4(DEEP_FLOW.amp * (reduceMotion ? 0.5 : 1), DEEP_FLOW.scale, DEEP_FLOW.speed * (reduceMotion ? 0.5 : 1), DEEP_FLOW.curl) },
+    uFlowB: { value: new THREE.Vector4(DEEP_FLOW.rayBend, DEEP_FLOW.patch.amp, DEEP_FLOW.patch.scale, DEEP_FLOW.patch.speed * (reduceMotion ? 0.5 : 1)) },
     uRays: { value: new THREE.Vector3(reduceMotion ? RAYS.amp * 0.5 : RAYS.amp, RAYS.perp[0], RAYS.perp[1]) },
     uRayW: { value: new THREE.Vector4(RAYS.waves[0][0], RAYS.waves[0][1] / RAYS.waves[0][0], RAYS.waves[1][0], RAYS.waves[1][1] / RAYS.waves[1][0]) },
   };

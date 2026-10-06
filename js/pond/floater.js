@@ -106,6 +106,7 @@ uniform sampler2D uMap, uNormalMap;
 uniform vec2 uNormalScale;
 uniform vec3 uL, uThroughTint, uTint, uBelowTint, uThroughHaze;
 uniform float uAmbient, uDiffuse, uEdge, uThroughDesat, uBelowDepth, uBelowDesat, uThroughHazeAmt, uTime, uNetGain;
+uniform vec3 uRimLine; // (độ rộng px, sáng của quầng mép nước, tối của dải ngay dưới mép)
 varying vec2 vUv;
 varying vec3 vN, vP;
 varying float vLocalY;
@@ -158,6 +159,15 @@ void main(){
   vec3 wet = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))), uBelowDesat) * uBelowTint;
   col = mix(col, wet, depth);
 
+  // Mép nước ôm thân cho có chiều sâu: mặt nước cong lên bám vào thân thành một quầng sáng mảnh màu trời ngay
+  // trên mực nước, và ngay dưới là một dải tối mảnh (bóng của chính mép nước lên phần chìm). Cả hai là hàm
+  // Gauss theo độ cao — như làm mờ 1–2 px đường ranh mà không cần thêm lượt render.
+  float rw = max(uRimLine.x, 0.5);
+  float rimUp = exp(-pow((vLocalY - rw * 0.6) / rw, 2.0));
+  float rimDn = exp(-pow((vLocalY + rw * 1.6) / (rw * 1.4), 2.0));
+  col = mix(col, uThroughHaze, rimUp * uRimLine.y);
+  col *= 1.0 - rimDn * uRimLine.z;
+
   gl_FragColor = vec4(col, 1.0);
   #include <colorspace_fragment>
 }`;
@@ -190,6 +200,7 @@ export function floaterUniforms(model, look, ambGain = AMBIENT_GAIN) {
     uAmbient: { value: look.ambient },
     uDiffuse: { value: look.diffuse },
     uEdge: { value: look.waterEdge },
+    uRimLine: { value: new THREE.Vector3(look.rim?.width ?? 2, look.rim?.glow ?? 0, look.rim?.shade ?? 0) },
     uThroughTint: { value: new THREE.Vector3(...look.throughTint) },
     uThroughDesat: { value: look.throughDesat },
     uThroughHaze: { value: new THREE.Vector3(...(look.throughHaze || [1, 1, 1])) },

@@ -29,15 +29,21 @@ export const PERSPECTIVE = { near: 1.25, far: 0.6, radial: true, lean: 0.6 };
 // Nền: tranh vòm cây + 9 lớp hoà trộn mặt nước đã nướng thành một ảnh (tools/bake-bg.py), phủ đúng khổ artboard.
 export const BG = { url: 'images-bg/bg.webp', rect: { x: 0, y: 0, w: 1920, h: 1080 } };
 
-// Vùng MẶT NƯỚC (đo từ "dimension ref" / "mask shape ref" của gói art, toạ độ artboard):
-// - arc: cung vàng "viền mask dùng cho loang nước & hiệu ứng tương tác nước" — bên trên cung là mặt nước
-//   (sóng, vịt, lá, chạm được), bên dưới là nước sâu (bong bóng, tia nắng). Ngoài hai đầu kéo dài thẳng.
+// Vùng MẶT NƯỚC (toạ độ artboard):
+// - arc: mép dưới vùng nước loang — bên trên là mặt nước (sóng, vịt, lá, chạm được), bên dưới là nước sâu
+//   (bong bóng, tia nắng). Chữ V do chủ dự án khoanh trên ảnh chụp (2026-10-06, "loang full khu highlight"):
+//   cạnh trái dốc ~0,88, cạnh phải ~−0,59, đáy cong NẰM DƯỚI khung (y ≈ 1125) nên cả dải giữa tới đáy màn hình
+//   là mặt nước. Thay cho cung vàng của gói art (đáy y 722). Ngoài hai đầu kéo dài thẳng.
 // - ellipse: elip xanh (mask shape) — vùng vẽ lưới sóng trắng; edge: từ bao nhiêu phần bán kính thì mờ dần.
-// - fade: mép mặt nước hoà mềm trong ngần này px (sóng và khúc xạ tắt dần, không có đường cắt).
+// - fade: sóng và khúc xạ tắt dần qua mép trong ngần này px — đủ mềm để không thành vạch cắt ngang vòng sóng.
+// - deepBlur: nước sâu nhoè Gauss bán kính px (≈ 1–2 px nhìn thấy), chuyển dần trong width px quanh mép. Đây là
+//   cách tạo "Gaussian blur ở mép nước cho chân thật" (2026-10-06). KHÔNG vẽ vệt sáng / dải tối dọc mép: đã thử,
+//   chủ dự án bác — thành một đường kẻ, mất chân thật.
 export const SURFACE = {
-  arc: [[0, 490], [240, 611], [480, 679], [720, 713], [960, 722], [1200, 705], [1440, 662], [1680, 582], [1920, 437]],
+  arc: [[0, 395], [240, 607], [480, 819], [720, 1031], [840, 1095], [985, 1125], [1120, 1100], [1300, 965], [1440, 881], [1680, 740], [1920, 599]],
   ellipse: { cx: 1005, cy: 275, rx: 1050, ry: 513, edge: 0.78 },
-  fade: 110,
+  fade: 28,
+  deepBlur: { px: 2, width: 70 },
 };
 // Mép dưới của mặt nước tại hoành độ x (nội suy tuyến tính trên cung, kéo dài thẳng ngoài hai đầu).
 export function surfaceBottom(x) {
@@ -46,6 +52,12 @@ export function surfaceBottom(x) {
   while (i < n - 1 && x > a[i][0]) i++;
   const [x0, y0] = a[i - 1], [x1, y1] = a[i];
   return y0 + ((x - x0) * (y1 - y0)) / (x1 - x0);
+}
+// Khoảng cách VUÔNG GÓC (px ảnh) từ điểm tới mép mặt nước, dương = trong vùng. Cạnh chữ V dốc tới ~40°, đo theo
+// phương dọc (surfaceBottom − y) thì dải hút sóng ở cạnh dốc hẹp hơn ở đáy cả phần tư.
+export function surfaceInside(x, y) {
+  const slope = (surfaceBottom(x + 4) - surfaceBottom(x - 4)) / 8;
+  return (surfaceBottom(x) - y) / Math.sqrt(1 + slope * slope);
 }
 // Đa giác vùng mặt nước phủ bề ngang `world` (Path2D, toạ độ ảnh): từ trên khung xuống tới cung.
 export function surfacePath(world) {
@@ -61,6 +73,9 @@ export function surfacePath(world) {
 // MẶT PHẲNG NƯỚC (persp.js) nên ô lưới to ở trên, nhỏ dần xuống dưới, nghiêng theo tia về điểm tụ như vòng
 // sóng; trôi chậm và méo theo gợn sóng để không chết cứng.
 export const NET = {
+  // TẮT 2026-10-06: chủ dự án thấy lưới trắng phủ lên mặt nước lẫn vịt, lá khá nhiễu. false = không nạp net.svg,
+  // mặt nước và vật nổi bỏ qua lưới (netUniforms(null) → độ phủ 0). Bật lại: true.
+  enabled: false,
   url: 'images-bg/net.svg',
   texW: 2048, // rasterize SVG ở bề ngang này
   scale: 1400, // một bản lưới rộng ngần này đơn vị mặt nước (= px ảnh ở chỗ S = 1); ô lưới ≈ 8–12 % số này
@@ -88,6 +103,9 @@ export const BUBBLES = {
   alpha: 0.92,
   pop: { apex: [901, 707], slope: 0.727 }, // viền tam giác: y_nổ(x) = apex.y − |x − apex.x|·slope
   spark: { url: 'images-bg/spark.svg', dur: 0.55, size: 2.0 }, // tia nổ: to bằng bán kính bóng × size, kéo dài dur giây
+  // Bấm mặt nước: count bóng nhỏ bán kính r sinh dưới chỗ bấm below px, nổi travel px với tốc độ rise rồi vỡ; z lúc
+  // sinh → lúc vỡ (gần người xem rồi lùi về phía mặt nước); max bóng cùng lúc; ripple: gợn khi vỡ (biên độ sim).
+  tap: { count: [1, 3], r: [14, 30], below: [25, 70], travel: [70, 150], rise: [100, 150], z: [75, 25], max: 24, wobble: 6, ripple: 0.6 },
 };
 
 // Sao lấp lánh (WATER-SPARK.svg): nhấp nháy rồi đổi chỗ; phần lớn trong vùng trời/mặt nước, vài cái dưới nước sâu.
@@ -111,6 +129,32 @@ export const AUDIO = {
 
 // Tia nắng lung linh trong nước sâu (ngoài vùng mặt nước): hai dải sin trôi theo phương vuông góc với tia
 // (tia trong tranh từ góc phải trên xuống trái dưới). amp = 0 là tắt.
+// Liquify nước sâu (2026-10-06, "nước chuyển động cho thật hơn"): nền phía dưới mép uốn lượn chậm như nhìn qua khối
+// nước đang trôi — domain-warp noise trong water.js. amp px méo tối đa (ở sâu nhất;
+// sát mép một nửa, trên mặt nước 0), scale cỡ xoáy px, speed tốc độ trôi (đơn vị nhiễu / giây), curl độ cuộn,
+// ramp px từ mép xuống tới chỗ méo đủ.
+// Mức nhẹ (3,5 px, 0,05) chủ dự án thấy "chưa thay đổi nhiều" → mức rõ, kèm tia nắng uốn theo dòng (rayBend px) và
+// mảng sáng tối loang chậm (patch: amp ±, scale px, speed) như nắng xuyên mặt nước dao động — không có nét.
+export const DEEP_FLOW = {
+  amp: 12, scale: 240, speed: 0.3, curl: 1.0, ramp: 300,
+  rayBend: 45,
+  patch: { amp: 0.12, scale: 520, speed: 0.05 },
+};
+
+// Tán cây trong nền đung đưa theo gió (2026-10-06): chỉ CÂY (tách theo màu từ bg.webp lúc nạp — không có lớp cây
+// riêng), trời mây đứng yên; mọi chỗ có cây kể cả nước sâu. Nhẹ, chậm. amp px dời tối đa ở ngọn (rìa khối cây vươn
+// ra trời; lõi và gốc ~25 %); period chu kỳ lắc (s); gust: cơn gió mạnh hơn (biên độ × (1 + amt)) khoảng every
+// giây một lần; centre tâm khoảng trời (toạ độ ảnh) — cây lắc theo phương tiếp tuyến quanh đây (sang hai bên).
+// key: ngưỡng tách cây — leaf = smoothstep(lo, hi, (g − b)/255) × smoothstep(sLo, sHi, độ bão hoà); vệt nước ngọc
+// lam dễ dính vào thì nâng lo/hi. blur/tipBlur: làm mờ mặt nạ (px ảnh) cho trường dời / cho độ "ngọn".
+export const FOLIAGE = {
+  amp: 14, period: 5.5,
+  gust: { every: 9, amt: 0.6 },
+  centre: [1000, 330],
+  key: { lo: 0.02, hi: 0.12, sLo: 0.15, sHi: 0.35 },
+  blur: 12, tipBlur: 120,
+};
+
 export const RAYS = { amp: 0.05, perp: [0.91, 0.42], waves: [[140, 9], [310, -6]] }; // [bước sóng px, tốc độ px/s]
 
 // Lá sen trôi. dir = 1: trái → phải, dir = -1: phải → trái. Lá KHÔNG tự xoay (xoay thì cuống lá sai hướng).
@@ -138,7 +182,7 @@ export const LEAVES = {
 // Hai chú vịt (model 3D, xem DUCK_MODEL bên dưới).
 export const DUCKS = {
   count: 2,
-  scale: 0.66,
+  scale: 0.6,
   speed: 42, // tốc độ bơi (px ảnh / giây)
   turnRate: 1.25, // tốc độ xoay hướng (rad/s) — chậm lại thì khung đổi thưa, đỡ giật
   accel: 2.2, // độ bám vận tốc mong muốn (1/s)
@@ -152,7 +196,7 @@ export const DUCKS = {
 
   // Sóng sau đuôi. Vịt bơi gần như liên tục nên đây là nguồn sóng thường trực — để mạnh một chút
   // là cả mặt ao đầy vòng sóng chồng chéo. Giữ rất nhẹ và thưa.
-  wakeEvery: 0.20, // giãn cách tạo sóng (giây)
+  wakeEvery: 0.35, // giãn cách tạo sóng (giây). Khoảng cách giữa các vòng trên mặt nước = tốc độ lan × số này; chủ dự án muốn khoảng cách +20 % khi sóng đã chậm thêm 30 % (đo: 373 × 0,20 ≈ 75 → 257 × 0,35 ≈ 90, 2026-10-06)
   wakeGain: 0.34,
   wakeMinSpeed: 16, // bơi chậm hơn ngần này thì không rẽ sóng
 
@@ -185,7 +229,7 @@ export const DUCKS = {
     roll: 0.14, // biên độ lắc thân (rad)
     headYaw: 0.35, // biên độ lúc lắc đầu (rad)
     afterDrag: 0.7, // xác suất rũ sau khi được thả
-    drops: 6, // số giọt bắn ra mỗi đợt
+    drops: 6, // số chỗ gợn mặt nước mỗi đợt rũ (chia hai bên thân; không còn bắn giọt)
   },
 };
 
@@ -219,7 +263,8 @@ export const DUCK_MODEL = {
   tail: { base: 0.30, tip: 0.40, amp: 0.22, hz: 6.5, every: [2.5, 6], dur: 0.8 }, // người dùng muốn vẫy dày hơn: trước là 4–10 s
   refract: 200, // phần NỔI (nhìn xuyên qua mặt nước từ dưới lên) bị bẻ lệch = độ dốc mặt nước × số này (px ảnh)
   refractMax: 14, // nhưng không quá ngần này px — gợn ngay sau cú chạm rất dốc, không chặn thì vịt văng ra
-  waterEdge: 4, // đường mặt nước hoà mềm trong ngần này px
+  waterEdge: 6, // đường mặt nước hoà mềm trong ngần này px
+  rim: { width: 2, glow: 0.3, shade: 0.14 }, // mép nước ôm thân: quầng sáng mảnh trên mực nước + dải tối ngay dưới (floater.js)
   ambient: 0.55, // ánh sáng: texture đã có bóng vẽ sẵn nên chỉ thêm nhẹ cho có khối
   diffuse: 0.6,
   normalScale: 0.6, // độ nổi của vân lông từ normal map (0 = tắt)
@@ -243,6 +288,7 @@ export const LEAF_MODEL = {
   float: 2, // đáy mặt lá cao hơn mực nước ngần này px
   refract: 200, refractMax: 14, // như vịt
   ambient: 0.6, diffuse: 0.55, normalScale: 0.5, waterEdge: 3,
+  // không có quầng mép nước (rim): lá chỉ dày ~5 px nên cả mặt lá nằm trong dải ấy và bị phủ trắng
   // texture lá vốn nhạt (pastel) nên màn nước phủ nhẹ tay hơn vịt, không thì lá xám xịt
   throughTint: [0.86, 0.9, 0.94], throughDesat: 0.25, throughHaze: [0.74, 0.86, 0.97], throughHazeAmt: 0.14,
   netGain: 0.45, // lưới sóng trắng phủ lên mặt lá nhẹ thôi — mặt lá phẳng mà phủ đậm như vịt thì thành loang lổ
@@ -262,15 +308,16 @@ export const SIM = {
   minCell: 3,
   maxCell: 12,
   maxCells: 300000, // lưới nằm trên mặt nước phối cảnh: phần dưới (xa) rộng và dày hơn — cho thêm ô kẻo phần trên (gần, phóng to) thô
-  waveC: 0.33, // (vận tốc sóng · dt / ô)², ổn định khi < 0.75; ô to hơn thì hạ số này để sóng lan trên màn hình không nhanh hơn
+  waveC: 0.1035, // (vận tốc sóng · dt / ô)², ổn định khi < 0.75. Tốc độ lan ∝ √waveC. Chủ dự án giảm hai lần (2026-10-06): −20 % (0,33 → 0,2112) rồi −30 % nữa (× 0,7² → 0,1035); chung cho mọi nguồn sóng vì cả ao là một mặt nước
   hz: 120,
   damp: 0.9915, // tắt dần nhanh hơn: vịt bơi liên tục nên sóng cũ phải tan kịp
   dampLeaf: 0.95, // thêm tắt dần dưới lá (chỉ mặt lá, không tính cuống)
   // Mép vùng mặt nước (cung SURFACE.arc) không phải tường: trong `shoreBand` px ảnh cuối trước khi tới cung, hệ số
   // tắt dần hạ mượt (smoothstep) từ `damp` xuống `dampShore` nên sóng tắt dần rồi mới chạm mép, không dội lại.
   // Đổi đột ngột (bản trước: chuyển trong ~16 px) là sóng đập vào "thành" giữa phía dưới rồi phản lại — người dùng chê.
+  // Dải hẹp (~50 px) để sóng còn rõ tới sát mép vùng đã khoanh; vẫn ~10 ô, sóng tắt hết trước khi chạm mép.
   dampShore: 0.86,
-  shoreBand: 220,
+  shoreBand: 50,
   // Lớp hút sóng ở mép lưới: mép lưới là tường cứng (ô biên luôn = 0) nên sóng dội ngược vào màn hình,
   // ao đầy sóng chồng chéo. Trong `sponge` px cuối, hệ số tắt dần hạ mượt từ `damp` xuống `dampEdge`
   // để sóng tan trước khi chạm tường — và vì lề thế giới (LAYOUT.worldMargin) rộng hơn, dải này nằm ngoài màn hình.

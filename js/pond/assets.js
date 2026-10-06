@@ -1,8 +1,8 @@
 // Nạp asset: nền nướng sẵn (images-bg/bg.webp), các SVG hiệu ứng của gói art (lưới sóng trắng, tia sáng,
-// bong bóng) rasterize thành texture, giọt nước từ file AI cũ (images-duck-v2/manifest.json), model 3D cho
-// vịt và lá. prepareAssets chạy một lần lúc mở trang.
+// bong bóng) rasterize thành texture, độ ép dẹt `squash` từ file AI cũ (images-duck-v2/manifest.json), model 3D
+// cho vịt và lá. prepareAssets chạy một lần lúc mở trang.
 import * as THREE from 'three';
-import { IMG_DIR, MANIFEST, BG, NET, BUBBLES, SPARKLES } from './config.js';
+import { MANIFEST, BG, NET, BUBBLES, SPARKLES, FOLIAGE } from './config.js';
 import { loadDuckModel } from './duck3d.js';
 import { loadLeafModels } from './leaf3d.js';
 
@@ -24,7 +24,6 @@ function loadImageURL(url) {
     im.src = url;
   });
 }
-const loadImage = (name) => loadImageURL(IMG_DIR + name);
 
 // Rasterize một SVG (chỉ có viewBox, như Illustrator xuất) thành canvas rộng `w` px. Ghi thẳng width/height
 // vào thẻ <svg> rồi vẽ qua blob URL để trình duyệt dựng vector đúng cỡ này (không phóng từ cỡ mặc định 300×150).
@@ -71,32 +70,6 @@ function makeTileable(c, border) {
   return c;
 }
 
-// Một lớp đã xuất từ file AI. Canvas giữ nguyên độ phân giải gốc của file, còn w/h và mảng alpha quy về px ảnh.
-function layerFrom(img, rec) {
-  const sc = rec.scale || 1;
-  const c = makeCanvas(rec.w * sc, rec.h * sc);
-  ctx2d(c).drawImage(img, 0, 0, c.width, c.height);
-  const w = Math.max(1, Math.round(rec.w)), h = Math.max(1, Math.round(rec.h));
-  let probe = c;
-  if (sc !== 1) {
-    probe = makeCanvas(w, h);
-    ctx2d(probe).drawImage(c, 0, 0, w, h);
-  }
-  const d = ctx2d(probe).getImageData(0, 0, w, h).data;
-  const alpha = new Uint8Array(w * h);
-  for (let i = 0; i < alpha.length; i++) alpha[i] = d[i * 4 + 3];
-  return { canvas: c, alpha, w, h, x: rec.x, y: rec.y };
-}
-
-const textures = new WeakMap();
-export function textureFrom(canvas) {
-  const hit = textures.get(canvas);
-  if (hit) return hit;
-  const t = makeTexture(canvas);
-  textures.set(canvas, t);
-  return t;
-}
-
 // Texture màu từ canvas (sprite): sRGB, nhân sẵn alpha, có mipmap.
 export function makeTexture(canvas) {
   const t = new THREE.CanvasTexture(canvas);
@@ -123,6 +96,37 @@ export function imageTexture(img) {
 }
 
 // Texture dữ liệu (mặt nạ, pháp tuyến): không phải màu — không chuyển không gian màu.
+// Mặt nạ CÂY của nền (cho tán lá đung đưa, water.js): nền là một ảnh nướng sẵn không có lớp cây riêng nên tách
+// theo màu — cây xanh lá (g > b, bão hoà), trời xanh lam/trắng. Canvas ¼ cỡ phủ đúng BG.rect.
+// r = mặt nạ mờ nhẹ (FOLIAGE.blur) = trường dời, mượt nên ảnh uốn liền không rách mép lá;
+// g = mờ rất rộng (FOLIAGE.tipBlur): r·(1 − g) lớn ở rìa khối cây (ngọn vươn ra trời), nhỏ ở lõi và gốc.
+// Nền đen đục: canvas trong suốt thì kênh bị nhân sẵn alpha, đọc sai. flipY mặc định như texture nền → cùng uv.
+function foliageMask(img) {
+  const W = 640, H = Math.round((W * BG.rect.h) / BG.rect.w), k = W / BG.rect.w, K = FOLIAGE.key;
+  const src = makeCanvas(W, H), sg = ctx2d(src);
+  sg.drawImage(img, 0, 0, W, H);
+  const id = sg.getImageData(0, 0, W, H), d = id.data;
+  const ss = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], g = d[i + 1], b = d[i + 2], mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    const v = ss(K.lo, K.hi, (g - b) / 255) * ss(K.sLo, K.sHi, mx > 0 ? (mx - mn) / mx : 0) * 255;
+    d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+  }
+  sg.putImageData(id, 0, 0);
+  const blurred = (px) => {
+    const c = makeCanvas(W, H), g = ctx2d(c);
+    g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+    g.filter = `blur(${(px * k).toFixed(2)}px)`;
+    g.drawImage(src, 0, 0);
+    return g.getImageData(0, 0, W, H).data;
+  };
+  const a = blurred(FOLIAGE.blur), t = blurred(FOLIAGE.tipBlur);
+  const out = makeCanvas(W, H), og = ctx2d(out), od = og.createImageData(W, H);
+  for (let i = 0; i < od.data.length; i += 4) { od.data[i] = a[i]; od.data[i + 1] = t[i]; od.data[i + 3] = 255; }
+  og.putImageData(od, 0, 0);
+  return { texture: dataTexture(out), canvas: out };
+}
+
 export function dataTexture(canvas) {
   const t = new THREE.CanvasTexture(canvas);
   t.colorSpace = THREE.NoColorSpace;
@@ -149,47 +153,17 @@ export function setSpriteColor(m, alpha, r = 1, g = r, b = r) {
   m.color.setRGB(r * alpha, g * alpha, b * alpha);
 }
 
-/* ------------------------------------------------------------------ drops */
-// Tách lớp giọt nước thành từng giọt rời (nhãn liên thông 8 hướng).
-function splitDrops(canvas, ox, oy) {
-  const g = ctx2d(canvas), { width: w, height: h } = canvas;
-  const d = g.getImageData(0, 0, w, h).data;
-  const seen = new Uint8Array(w * h), out = [], stack = [];
-  for (let i = 0; i < w * h; i++) {
-    if (seen[i] || d[i * 4 + 3] < 24) continue;
-    let x0 = w, y0 = h, x1 = 0, y1 = 0, area = 0;
-    stack.push(i); seen[i] = 1;
-    while (stack.length) {
-      const j = stack.pop(), x = j % w, y = (j / w) | 0;
-      area++;
-      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        const nx = x + dx, ny = y + dy;
-        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-        const k = ny * w + nx;
-        if (!seen[k] && d[k * 4 + 3] >= 24) { seen[k] = 1; stack.push(k); }
-      }
-    }
-    if (area < 6) continue;
-    const p = 2;
-    const rx = Math.max(0, x0 - p), ry = Math.max(0, y0 - p);
-    const rw = Math.min(w, x1 + p + 1) - rx, rh = Math.min(h, y1 + p + 1) - ry;
-    const c = makeCanvas(rw, rh);
-    ctx2d(c).drawImage(canvas, rx, ry, rw, rh, 0, 0, rw, rh);
-    out.push({ canvas: c, w: rw, h: rh, area, cx: ox + rx + rw / 2, cy: oy + ry + rh / 2 });
-  }
-  return out;
-}
-
 /* ------------------------------------------------------------------ main */
 export async function prepareAssets() {
   const warn = (what, fallback = null) => (err) => { console.warn(`[Ao Vịt] Không nạp được ${what}:`, err); return fallback; };
   // Mọi thứ xin cùng lúc. Nền hỏng thì không còn gì để vẽ → để lỗi lan lên main.js. Model, lưới sóng, bong
   // bóng, sao hỏng thì ao vẫn mở, chỉ thiếu món đó — đừng vì một file mà trắng cả trang.
-  const bgP = loadImageURL(BG.url).then(imageTexture);
+  const bgImgP = loadImageURL(BG.url);
+  const bgP = bgImgP.then(imageTexture);
+  const foliageP = bgImgP.then(foliageMask).catch(warn('mặt nạ cây'));
   const modelP = loadDuckModel().catch(warn('model vịt'));
   const leavesP = loadLeafModels().catch(warn('model lá', []));
-  const netP = rasterSvg(NET.url, NET.texW).then((c) => {
+  const netP = !NET.enabled ? Promise.resolve(null) : rasterSvg(NET.url, NET.texW).then((c) => {
     const t = makeTexture(makeTileable(c, Math.round(c.width * 0.12)));
     t.wrapS = t.wrapT = THREE.RepeatWrapping; // lưới lấy mẫu trên mặt phẳng nước rộng hơn một bản nên lặp
     return { texture: t, aspect: c.width / c.height };
@@ -197,18 +171,17 @@ export async function prepareAssets() {
   const bubblesP = Promise.all(BUBBLES.urls.map((u) => rasterSvg(u, 256, true).then(makeTexture))).catch(warn('bong bóng', []));
   const sparkP = rasterSvg(SPARKLES.url, 256, true).then(makeTexture).catch(warn('tia sáng'));
 
-  // Từ file AI cũ chỉ còn dùng giọt nước (bắn lên khi chạm / vịt rũ) và `squash` — độ ép dẹt của mặt nước.
+  // Từ file AI cũ chỉ còn dùng `squash` — độ ép dẹt của mặt nước. Giọt nước (giot_nuoc) đã bỏ 2026-10-06: bắn lên
+  // khi bấm / vịt rũ trông như bong bóng lạ ngoài bubble-1..3.
   const man = await fetch(MANIFEST).then((r) => {
     if (!r.ok) throw new Error('Không đọc được ' + MANIFEST);
     return r.json();
   });
-  const dropsLayer = layerFrom(await loadImage(man.drops.file), man.drops);
-  const [bg, net, bubbles, spark, model, leaves] = await Promise.all([bgP, netP, bubblesP, sparkP, modelP, leavesP]);
+  const [bg, net, bubbles, spark, model, leaves, foliage] = await Promise.all([bgP, netP, bubblesP, sparkP, modelP, leavesP, foliageP]);
 
   return {
-    bg: { texture: bg, rect: BG.rect },
+    bg: { texture: bg, rect: BG.rect, foliage },
     net, bubbles, spark,
-    drops: splitDrops(dropsLayer.canvas, dropsLayer.x, dropsLayer.y),
     leaves,
     duck: { squash: man.duck.squash, model },
   };

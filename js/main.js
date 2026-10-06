@@ -17,7 +17,9 @@ async function boot() {
       import('./pond/scene.js'),
       import('./pond/input.js'),
     ]);
-    const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // Bản dịu chỉ bật bằng cờ ?calm, KHÔNG theo prefers-reduced-motion: Windows tắt "Animation effects" là Chrome
+    // báo reduce, ao mất sóng sau đuôi vịt, vẫy đuôi, rũ nước… — chủ dự án thấy máy mình khác máy người khác.
+    const reduceMotion = params.has('calm');
     const pond = await Pond.create(pondEl, canvas, {
       reduceMotion,
       freeze: params.has('freeze'),
