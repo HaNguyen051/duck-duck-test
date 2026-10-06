@@ -99,7 +99,10 @@ export function imageTexture(img) {
 // Mặt nạ CÂY của nền (cho tán lá đung đưa, water.js): nền là một ảnh nướng sẵn không có lớp cây riêng nên tách
 // theo màu — cây xanh lá (g > b, bão hoà), trời xanh lam/trắng. Canvas ¼ cỡ phủ đúng BG.rect.
 // r = mặt nạ mờ nhẹ (FOLIAGE.blur) = trường dời, mượt nên ảnh uốn liền không rách mép lá;
-// g = mờ rất rộng (FOLIAGE.tipBlur): r·(1 − g) lớn ở rìa khối cây (ngọn vươn ra trời), nhỏ ở lõi và gốc.
+// g = mờ rất rộng (FOLIAGE.tipBlur) ~ độ dày khối cây;
+// b = VÙNG TRỜI (loang từ tâm khoảng trời FOLIAGE.centre qua các điểm không phải cây mà sáng — nước sâu tối không
+//     lọt vào) rồi làm mờ FOLIAGE.skyBlur: cây có b cao là lá viền giáp trời (lớp 3 trong water.js). Dải cây mỏng nên
+//     không phân biệt rìa/lõi được bằng độ dày khối — phải biết trời ở đâu.
 // Nền đen đục: canvas trong suốt thì kênh bị nhân sẵn alpha, đọc sai. flipY mặc định như texture nền → cùng uv.
 function foliageMask(img) {
   const W = 640, H = Math.round((W * BG.rect.h) / BG.rect.w), k = W / BG.rect.w, K = FOLIAGE.key;
@@ -107,22 +110,38 @@ function foliageMask(img) {
   sg.drawImage(img, 0, 0, W, H);
   const id = sg.getImageData(0, 0, W, H), d = id.data;
   const ss = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-  for (let i = 0; i < d.length; i += 4) {
+  const N = W * H, leaf = new Float32Array(N), open = new Uint8Array(N);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
     const r = d[i], g = d[i + 1], b = d[i + 2], mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-    const v = ss(K.lo, K.hi, (g - b) / 255) * ss(K.sLo, K.sHi, mx > 0 ? (mx - mn) / mx : 0) * 255;
-    d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+    leaf[j] = ss(K.lo, K.hi, (g - b) / 255) * ss(K.sLo, K.sHi, mx > 0 ? (mx - mn) / mx : 0);
+    open[j] = leaf[j] < 0.5 && (0.299 * r + 0.587 * g + 0.114 * b) / 255 > FOLIAGE.skyLum ? 1 : 0;
+    d[i] = d[i + 1] = d[i + 2] = leaf[j] * 255; d[i + 3] = 255;
   }
   sg.putImageData(id, 0, 0);
-  const blurred = (px) => {
+  // vùng trời: loang 4 hướng từ tâm khoảng trời qua các điểm "mở" (không phải cây, đủ sáng)
+  const sky = makeCanvas(W, H), kg = ctx2d(sky), kd = kg.createImageData(W, H);
+  const cx = Math.round((FOLIAGE.centre[0] - BG.rect.x) * k), cy = Math.round((FOLIAGE.centre[1] - BG.rect.y) * k);
+  const seen = new Uint8Array(N), stack = [cy * W + cx];
+  seen[cy * W + cx] = 1;
+  while (stack.length) {
+    const j = stack.pop(), x = j % W, y = (j / W) | 0;
+    kd.data[j * 4] = kd.data[j * 4 + 1] = kd.data[j * 4 + 2] = 255;
+    for (const n of [x > 0 ? j - 1 : -1, x < W - 1 ? j + 1 : -1, y > 0 ? j - W : -1, y < H - 1 ? j + W : -1]) {
+      if (n >= 0 && !seen[n] && open[n]) { seen[n] = 1; stack.push(n); }
+    }
+  }
+  for (let j = 0; j < N; j++) kd.data[j * 4 + 3] = 255;
+  kg.putImageData(kd, 0, 0);
+  const blurred = (from, px) => {
     const c = makeCanvas(W, H), g = ctx2d(c);
     g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
     g.filter = `blur(${(px * k).toFixed(2)}px)`;
-    g.drawImage(src, 0, 0);
+    g.drawImage(from, 0, 0);
     return g.getImageData(0, 0, W, H).data;
   };
-  const a = blurred(FOLIAGE.blur), t = blurred(FOLIAGE.tipBlur);
+  const a = blurred(src, FOLIAGE.blur), t = blurred(src, FOLIAGE.tipBlur), sb = blurred(sky, FOLIAGE.skyBlur);
   const out = makeCanvas(W, H), og = ctx2d(out), od = og.createImageData(W, H);
-  for (let i = 0; i < od.data.length; i += 4) { od.data[i] = a[i]; od.data[i + 1] = t[i]; od.data[i + 3] = 255; }
+  for (let i = 0; i < od.data.length; i += 4) { od.data[i] = a[i]; od.data[i + 1] = t[i]; od.data[i + 2] = sb[i]; od.data[i + 3] = 255; }
   og.putImageData(od, 0, 0);
   return { texture: dataTexture(out), canvas: out };
 }

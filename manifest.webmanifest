@@ -1,0 +1,18 @@
+{
+  "name": "Ao Vịt",
+  "short_name": "Ao Vịt",
+  "description": "Ao sen tương tác nhìn từ dưới mặt nước: kéo vịt, kéo lá sen, chạm nước để tạo sóng.",
+  "lang": "vi",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "any",
+  "background_color": "#0b3147",
+  "theme_color": "#0b3147",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -107,9 +107,14 @@ uniform vec3 uRays;    // (biên độ, perp.x, perp.y)
 uniform vec4 uRayW;    // (bước sóng 1, tốc độ 1, bước sóng 2, tốc độ 2)
 uniform float uDeepBlur; // bán kính làm mờ nền ở nước sâu (px ảnh) — xem bước 1
 uniform vec4 uFlow;      // liquify nước sâu: (méo tối đa px, cỡ xoáy px, tốc độ, độ cuộn) — DEEP_FLOW
-uniform sampler2D uFoliage; // mặt nạ cây (assets.js → foliageMask): r = trường dời, g = mờ rộng (để tìm ngọn)
-uniform vec4 uFoliageA;  // (dời tối đa px, tần số góc, cơn gió amt, 1/khoảng cách cơn gió s)
+uniform sampler2D uFoliage; // mặt nạ cây (assets.js → foliageMask): r = trường dời, g = mờ rộng, b = gần vùng trời
+uniform vec4 uFoliageA;  // (trần độ dời px, làn gió px/s, cơn gió amt, 1/khoảng cách cơn gió s)
 uniform vec2 uFoliageC;  // tâm khoảng trời (toạ độ ảnh)
+uniform vec4 uFolL1;     // tiền cảnh: (góc min rad, góc max rad, ω, bề rộng dải sát mép px)
+uniform vec4 uFolL2;     // vòm tán: (góc min rad, góc max rad, ω, tịnh tiến min px)
+uniform vec4 uFolL3;     // (tịnh tiến max px của vòm, lá viền: tịnh tiến min px, max px, ω)
+uniform vec4 uFolS;      // (độ sáng thấp nhất của le lói, trễ pha min s, khoảng trễ s, chưa dùng)
+uniform float uFolDebug; // 1: tô màu ba lớp cây (soi bằng __pond), 0: bình thường
 uniform vec4 uFlowB;     // (tia nắng uốn px, mảng sáng ±, cỡ mảng px, tốc độ mảng)
 // Value noise mượt + fbm 2 tầng cho dòng chảy nước sâu.
 float flowHash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -152,17 +157,40 @@ void main(){
                    flowFbm(fq + uFlow.w * flowFbm(fq + vec2(9.4, 1.3)) - uTime * 0.011)) * 2.0 - 1.0;
   float wDeep = deep * mix(0.5, 1.0, 1.0 - zm.b);
   p += warp * uFlow.x * wDeep;
-  // 1c) tán cây trong nền đung đưa theo gió: chỉ chỗ mặt nạ cây (trời mây đứng yên), lắc theo phương tiếp tuyến
-  // quanh tâm khoảng trời; ngọn (rìa khối cây vươn ra trời) lắc đủ, lõi và gốc ~25 %; các cụm lệch pha theo nhiễu
-  // không gian; thỉnh thoảng một cơn gió mạnh hơn. Trường dời mượt (mặt nạ đã làm mờ) nên ảnh uốn liền, không rách.
+  // 1c) cây trong nền chuyển động theo 3 LỚP (bản mô tả của chủ dự án, 2026-10-06), trời mây đứng yên. Nền là một
+  // ảnh gộp nên các lớp được chia mềm từ mặt nạ cây (r = cây, g = mờ rộng ~ độ dày khối):
+  //   L1 tiền cảnh — cành dày sát mép khung (hai bên, đáy): XOAY quanh gốc cành ±0,5–1,5°, chậm ~7 s, đầm;
+  //   L2 vòm tán  — khối lá chính quanh khoảng trời: xoay ±1–2,5° + tịnh tiến 2–5 px, ~5 s;
+  //   L3 lá viền  — lá mỏng giáp trời: chỉ rung tịnh tiến 2–3 px, nhanh hơn (~2,8 s).
+  // "transform-origin ở gốc" = gốc cành là chỗ tia (tâm trời → điểm) cắt mép khung; độ dời = góc × khoảng cách tới
+  // gốc, theo phương tiếp tuyến — ngọn lắc nhiều, gốc gần như yên. Easing: sin vốn ease-in-out (≈ cubic-bezier
+  // 0.45, 0.05, 0.55, 0.95), không có đoạn tuyến tính. animation-delay 0,5–2,5 s = trễ pha theo cụm (nhiễu vị trí)
+  // + một làn gió lướt ngang (x / uFoliageA.y) nên trái phải lệch pha như gió thổi qua. Mọi lớp chặn ở trần
+  // uFoliageA.x px để ảnh không bị kéo giãn lộ; trường dời mượt nên ảnh uốn liền, không rách.
   vec2 fuv = (p - uBgRect.xy) / uBgRect.zw;
-  vec2 fm = texture2D(uFoliage, vec2(fuv.x, 1.0 - fuv.y)).rg; // cùng quy ước lật dọc với uBg
+  vec3 fm = texture2D(uFoliage, vec2(fuv.x, 1.0 - fuv.y)).rgb; // cùng quy ước lật dọc với uBg; b = gần trời
   vec2 rc = p - uFoliageC;
-  vec2 ftan = vec2(-rc.y, rc.x) / max(length(rc), 1.0);
-  float fph = flowNoise(p / 350.0) * 6.2831853;
-  float sway = sin(uTime * uFoliageA.y + fph) * 0.75 + sin(uTime * uFoliageA.y * 1.7 + fph * 1.3) * 0.25;
+  float rcl = max(length(rc), 1.0);
+  vec2 fdir = rc / rcl, ftan = vec2(-fdir.y, fdir.x);
+  // khoảng cách từ tâm trời tới mép khung theo tia này (tia cắt hình chữ nhật artboard), rồi tới gốc cành
+  vec2 ext = vec2(mix(uFoliageC.x - uBgRect.x, uBgRect.x + uBgRect.z - uFoliageC.x, step(0.0, fdir.x)),
+                  mix(uFoliageC.y - uBgRect.y, uBgRect.y + uBgRect.w - uFoliageC.y, step(0.0, fdir.y)));
+  vec2 tb = ext / max(abs(fdir), vec2(1e-4));
+  float armL = max(min(tb.x, tb.y) - rcl, 0.0);
+  float dEdge = min(min(p.x - uBgRect.x, uBgRect.x + uBgRect.z - p.x), uBgRect.y + uBgRect.w - p.y);
+  // lá viền: cây nằm sát VÙNG TRỜI (kênh b = vùng trời loang từ tâm rồi làm mờ — assets.js → foliageMask)
+  float w3 = smoothstep(0.08, 0.35, fm.b);
+  float w1 = (1.0 - smoothstep(0.0, uFolL1.w, dEdge)) * (1.0 - w3);
+  float w2 = (1.0 - w1) * (1.0 - w3);
+  w1 *= fm.r; w2 *= fm.r; w3 *= fm.r;
+  float cn = flowNoise(p / 420.0 + 7.3);                  // "nhiễu cụm": biên độ riêng từng cụm
+  float tw = uTime - (uFolS.y + uFolS.z * flowNoise(p / 420.0)) - p.x / uFoliageA.y; // trễ pha cụm + gió lướt
+  float d1 = mix(uFolL1.x, uFolL1.y, cn) * sin(tw * uFolL1.z) * armL;
+  float d2 = mix(uFolL2.x, uFolL2.y, cn) * sin(tw * uFolL2.z) * armL + mix(uFolL2.w, uFolL3.x, cn) * sin(tw * uFolL2.z + 0.6);
+  float d3 = mix(uFolL3.y, uFolL3.z, cn) * (0.7 * sin(tw * uFolL3.w) + 0.3 * sin(tw * uFolL3.w * 1.9 + 1.1));
   float gust = 1.0 + uFoliageA.z * smoothstep(0.55, 0.9, flowNoise(vec2(uTime * uFoliageA.w, 0.5)));
-  p += ftan * uFoliageA.x * fm.r * (0.25 + 0.75 * (1.0 - fm.g)) * sway * gust;
+  float fd = (w1 * d1 + w2 * d2 + w3 * d3) * gust;
+  p += ftan * clamp(fd, -uFoliageA.x, uFoliageA.x);
   vec2 buv = (p - uBgRect.xy) / uBgRect.zw;
   // Nước sâu nhìn qua một lớp nước dày nên hơi nhoè: làm mờ Gauss 3×3 (trọng số 4-2-1) bán kính tăng dần qua
   // mép — mặt nước giữ nét, nước sâu mờ ~1–2 px. Chỗ chuyển là chính độ mờ, KHÔNG vẽ đường viền (chủ dự án
@@ -175,11 +203,16 @@ void main(){
     + texture2D(uBg, bu + bo).rgb + texture2D(uBg, bu - bo).rgb
     + texture2D(uBg, bu + vec2(bo.x, -bo.y)).rgb + texture2D(uBg, bu - vec2(bo.x, -bo.y)).rgb;
   c /= 16.0;
+  float sunNear = exp(-length(vImg - uSun) / 1500.0);
+  // 1d) ánh sáng le lói trên tán đón nắng: lá sáng, phía mặt trời, nhấp nháy rất nhẹ 0,95 → 1 theo cùng nhịp gió
+  float sunlit = fm.r * smoothstep(0.45, 0.75, dot(c, vec3(0.299, 0.587, 0.114))) * (0.5 + 0.5 * sunNear);
+  c *= 1.0 - sunlit * (1.0 - uFolS.x) * (0.5 + 0.5 * sin(tw * uFolL2.z + 1.3));
+  // soi lớp: L1 đỏ, L2 lục, L3 lam (uFolDebug = 1)
+  c = mix(c, vec3(w1, w2, w3) + c * 0.25, uFolDebug);
 
   // 2) tụ sáng: đây là thứ tạo ra hình sóng khi nhìn từ dưới lên.
   // Mặt cong lõm gom tia sáng lại -> vệt chói; cong lồi thì xoè ra -> tối.
   // Càng gần chỗ mặt trời rọi xuống thì tương phản càng mạnh.
-  float sunNear = exp(-length(vImg - uSun) / 1500.0);
   float focus = clamp(-lap * uFocus * (0.55 + uSunGain * sunNear), -0.55, 1.5);
   c *= 1.0 + focus;
   // phần chói nhất ngả sang trắng xanh như ánh sáng xuyên qua mặt nước
@@ -211,6 +244,7 @@ void main(){
 
 // Uniform của lưới sóng trắng cho một vật liệu (nước hoặc vật nổi). net = { texture, aspect } hoặc null (không
 // có lưới: texture 1×1 trong suốt, độ phủ 0). reduceMotion: trôi chậm lại.
+const TAU = Math.PI * 2, rad = (d) => (d * Math.PI) / 180;
 let emptyNet = null, black = null;
 const blackTex = () => {
   if (!black) { black = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); black.needsUpdate = true; }
@@ -238,7 +272,12 @@ export function createWater({ bg, net, zone, area, sim, reduceMotion }) {
     ...netUniforms(net, reduceMotion),
     uBg: { value: bg.texture },
     uFoliage: { value: bg.foliage ? bg.foliage.texture : blackTex() },
-    uFoliageA: { value: new THREE.Vector4(bg.foliage ? FOLIAGE.amp * (reduceMotion ? 0.5 : 1) : 0, 6.2831853 / FOLIAGE.period, FOLIAGE.gust.amt, 1 / FOLIAGE.gust.every) },
+    uFoliageA: { value: new THREE.Vector4(bg.foliage ? FOLIAGE.cap * (reduceMotion ? 0.5 : 1) : 0, FOLIAGE.wind, FOLIAGE.gust.amt, 1 / FOLIAGE.gust.every) },
+    uFolL1: { value: new THREE.Vector4(rad(FOLIAGE.fore.deg[0]), rad(FOLIAGE.fore.deg[1]), TAU / FOLIAGE.fore.period, FOLIAGE.fore.edge) },
+    uFolL2: { value: new THREE.Vector4(rad(FOLIAGE.mid.deg[0]), rad(FOLIAGE.mid.deg[1]), TAU / FOLIAGE.mid.period, FOLIAGE.mid.shift[0]) },
+    uFolL3: { value: new THREE.Vector4(FOLIAGE.mid.shift[1], FOLIAGE.tip.shift[0], FOLIAGE.tip.shift[1], TAU / FOLIAGE.tip.period) },
+    uFolS: { value: new THREE.Vector4(FOLIAGE.sheen.min, FOLIAGE.delay[0], FOLIAGE.delay[1] - FOLIAGE.delay[0], 0) },
+    uFolDebug: { value: 0 },
     uFoliageC: { value: new THREE.Vector2(FOLIAGE.centre[0], FOLIAGE.centre[1]) },
     uBgRect: { value: new THREE.Vector4(bg.rect.x, bg.rect.y, bg.rect.w, bg.rect.h) },
     uHeight: { value: sim.texture },

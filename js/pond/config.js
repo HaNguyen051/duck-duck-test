@@ -141,19 +141,29 @@ export const DEEP_FLOW = {
   patch: { amp: 0.12, scale: 520, speed: 0.05 },
 };
 
-// Tán cây trong nền đung đưa theo gió (2026-10-06): chỉ CÂY (tách theo màu từ bg.webp lúc nạp — không có lớp cây
-// riêng), trời mây đứng yên; mọi chỗ có cây kể cả nước sâu. Nhẹ, chậm. amp px dời tối đa ở ngọn (rìa khối cây vươn
-// ra trời; lõi và gốc ~25 %); period chu kỳ lắc (s); gust: cơn gió mạnh hơn (biên độ × (1 + amt)) khoảng every
-// giây một lần; centre tâm khoảng trời (toạ độ ảnh) — cây lắc theo phương tiếp tuyến quanh đây (sang hai bên).
-// key: ngưỡng tách cây — leaf = smoothstep(lo, hi, (g − b)/255) × smoothstep(sLo, sHi, độ bão hoà); vệt nước ngọc
-// lam dễ dính vào thì nâng lo/hi. blur/tipBlur: làm mờ mặt nạ (px ảnh) cho trường dời / cho độ "ngọn".
+// Cây trong nền chuyển động theo 3 LỚP (bản mô tả của chủ dự án, 2026-10-06; water.js bước 1c). Chỉ CÂY (mặt nạ tách
+// theo màu từ bg.webp lúc nạp — không có lớp cây riêng), trời mây đứng yên; mọi chỗ có cây kể cả nước sâu.
+// Lớp chia mềm từ mặt nạ: fore = cành dày sát mép khung (trong `edge` px tính từ mép trái/phải/đáy), tip = lá mỏng
+// giáp trời, mid = phần còn lại (vòm tán). fore/mid XOAY quanh gốc cành (chỗ tia tâm trời → điểm cắt mép khung) góc
+// deg (°, mỗi cụm một mức trong khoảng); mid thêm tịnh tiến shift px; tip chỉ rung tịnh tiến. period: chu kỳ (s).
+// cap: trần độ dời mọi lớp (px) — số góc theo bản mô tả (±2,5° ở cành dài ~500 px ≈ 20 px) nhưng chặn ở mức chủ dự
+// án đã chỉnh (14) để ảnh không kéo giãn lộ. delay: trễ pha giữa các cụm (s); wind: làn gió lướt ngang (px/s) cho
+// trái phải lệch pha. gust: thỉnh thoảng một cơn mạnh hơn. sheen: lá đón nắng nhấp nháy độ sáng min → 1.
+// Không làm lá rơi (đã hỏi, chủ dự án bỏ). key/blur/tipBlur: tách cây theo màu — xem foliageMask (assets.js).
 export const FOLIAGE = {
-  amp: 14, period: 5.5,
+  cap: 14,
+  centre: [1000, 330], wind: 650,
+  delay: [0.5, 2.5],
   gust: { every: 9, amt: 0.6 },
-  centre: [1000, 330],
+  fore: { deg: [0.5, 1.5], period: 7, edge: 260 },
+  mid: { deg: [1, 2.5], shift: [2, 5], period: 5 },
+  tip: { shift: [2, 3], period: 2.8 },
+  sheen: { min: 0.95 },
   key: { lo: 0.02, hi: 0.12, sLo: 0.15, sHi: 0.35 },
   blur: 12, tipBlur: 120,
+  skyLum: 0.5, skyBlur: 90, // vùng trời: không phải cây mà sáng hơn skyLum, nối liền tâm; làm mờ skyBlur px → lá viền
 };
+
 
 export const RAYS = { amp: 0.05, perp: [0.91, 0.42], waves: [[140, 9], [310, -6]] }; // [bước sóng px, tốc độ px/s]
 
