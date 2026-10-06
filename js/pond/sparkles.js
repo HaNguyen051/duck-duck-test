@@ -7,7 +7,8 @@ import { spriteMaterial, setSpriteColor } from './assets.js';
 const rand = (a, b) => a + Math.random() * (b - a);
 
 export class Sparkles {
-  constructor({ texture, scene, place, view, reduceMotion }) {
+  constructor({ texture, scene, place, view, reduceMotion, scale = 1 }) {
+    this.k = scale; // objScale: sao nhỏ lại trên điện thoại dọc
     this.place = place;
     this.V = view;
     this.reduceMotion = reduceMotion;
@@ -30,7 +31,7 @@ export class Sparkles {
     const y1 = inZone ? Math.min(V.y + V.h - 30, yb - 40) : V.y + V.h - 30;
     Object.assign(s, {
       x, y: y1 > y0 ? rand(y0, y1) : rand(V.y + 30, V.y + V.h - 30),
-      size: rand(SPARKLES.size[0], SPARKLES.size[1]),
+      size: rand(SPARKLES.size[0], SPARKLES.size[1]) * this.k,
       period: rand(SPARKLES.period[0], SPARKLES.period[1]),
       t: initial ? rand(0, SPARKLES.period[1]) : 0,
       rot: rand(0, Math.PI), spin: rand(-0.4, 0.4),

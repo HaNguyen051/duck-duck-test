@@ -14,7 +14,8 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 export class Leaves {
   // view: khung nhìn (toạ độ ảnh) — lá trôi trong dải này và vòng lại ở hai mép.
-  constructor({ models, scene, view, sim, persp, centre, squash, ambGain, reduceMotion, net }) {
+  constructor({ models, scene, view, sim, persp, centre, squash, ambGain, reduceMotion, net, scale = 1 }) {
+    this.k = scale; // objScale của cảnh: lá nhỏ lại trên điện thoại dọc (p.s giữ cỡ gốc để chọn cỡ khác nhau)
     this.V = view;
     this.persp = persp;
     this.centre = centre;
@@ -52,7 +53,7 @@ export class Leaves {
         m, s, mat, mesh, sway, root,
         x: 0, y: 0, vx: 0, vy: 0, ax: 0, ay: 0,
         lift: 0, vz: 0, wasLifted: false,
-        r: m.radius * s, // bán kính mặt lá, px trên mặt phẳng nước
+        r: m.radius * s * this.k, // bán kính mặt lá, px trên mặt phẳng nước
         speed: FLOW.speed + rand(-FLOW.jitter, FLOW.jitter),
         phase: rand(0, 100),
         order: this.top++,
@@ -106,7 +107,7 @@ export class Leaves {
     const span = LEAVES.scaleMax - LEAVES.scaleMin;
     let s = rand(LEAVES.scaleMin, LEAVES.scaleMax);
     if (Math.abs(s - p.s) < span * 0.25) s = p.s > (LEAVES.scaleMin + LEAVES.scaleMax) / 2 ? LEAVES.scaleMin + rand(0, span * 0.4) : LEAVES.scaleMax - rand(0, span * 0.4);
-    p.s = s; p.r = p.m.radius * s; p.R = p.r;
+    p.s = s; p.r = p.m.radius * s * this.k; p.R = p.r;
     p.x = FLOW.dir > 0 ? this.V.x - p.R - rand(0, 40) : this.V.x + this.V.w + p.R + rand(0, 40);
     p.placed = false;
     p.y = this.pickY(p, p.x + FLOW.dir * p.R);
@@ -285,7 +286,7 @@ export class Leaves {
       const z = Z.leaf + p.lift, kp = (CAMERA.D - z) / CAMERA.D;
       p.root.position.set((p.x - this.centre[0]) * kp, -(p.y - this.centre[1]) * kp, z);
       p.ps = this.persp.S(p.x, p.y);
-      p.root.scale.setScalar(p.s * kp * p.ps); // phối cảnh: cao hơn trên màn hình / ra hai bên thì to hơn
+      p.root.scale.setScalar(p.s * this.k * kp * p.ps); // phối cảnh: cao hơn trên màn hình / ra hai bên thì to hơn
       p.root.rotation.z = -this.persp.lean(p.x, p.y) * PERSPECTIVE.lean; // cuống ngả theo tia về điểm tụ
       p.mat.uniforms.uKp.value = kp;
       p.mat.uniforms.uTime.value = t;

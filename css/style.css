@@ -19,6 +19,9 @@ body {
 .pond {
   position: fixed;
   inset: 0;
+  /* Điện thoại: lấy chiều cao LỚN NHẤT của khung nhìn (thanh địa chỉ ẩn) để thanh địa chỉ ẩn/hiện không đổi cỡ
+     canvas — đổi cỡ là dựng lại cả cảnh, giật. Trình duyệt chưa có lvh thì dùng inset như cũ. */
+  height: 100lvh;
   overflow: hidden;
   /* lót cùng tông với nền mới (trời sáng trên, nước sâu xanh lục dưới) cho khoảnh khắc trước khi WebGL vẽ xong */
   background: linear-gradient(#9fd3ea, #3aa0b8 40%, #0f4a60 75%, #082634);

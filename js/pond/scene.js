@@ -2,7 +2,7 @@
 // hồ lên (gói art 10/2026): mặt nước là vùng trên cung SURFACE.arc, dưới là nước sâu có bong bóng và sao.
 // Khung nhìn (toạ độ ảnh) phủ kín màn hình theo kiểu cover; đổi cỡ màn hình thì dựng lại cảnh.
 import * as THREE from 'three';
-import { CAMERA, SIM, Z, AMBIENT_GAIN, LAYOUT, PERSPECTIVE, SURFACE, computeView, surfacePath, surfaceBottom, surfaceInside, BUBBLES, DEEP_FLOW } from './config.js';
+import { CAMERA, SIM, Z, AMBIENT_GAIN, LAYOUT, PERSPECTIVE, SURFACE, computeView, surfacePath, surfaceBottom, surfaceInside, BUBBLES, DEEP_FLOW, MOBILE, isMobileDevice } from './config.js';
 import { Persp } from './persp.js';
 import { prepareAssets, dataTexture } from './assets.js';
 import { WaterSim, cellFor } from './watersim.js';
@@ -42,6 +42,8 @@ export class Pond {
     this.acc = 0;
     this.nextDrop = rand(2, 4);
     this.pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
+    this.mobile = isMobileDevice(); // hồ sơ hiệu năng điện thoại (config MOBILE)
+    this.builds = 0;
     this.perf = { frames: 0, time: 0 };
     this.place = this.place.bind(this);
 
@@ -67,6 +69,9 @@ export class Pond {
     const world = { x: view.x - M, y: view.y - M, w: view.w + 2 * M, h: view.h + 2 * M };
     this.view = view;
     this.world = world;
+    this.builds++;
+    // Màn hẹp (điện thoại dọc) giữ khung cắt cover nhưng thu nhỏ vật thể (vịt, lá, bóng, sao) — xem MOBILE.
+    this.objScale = Math.min(1, Math.max(MOBILE.minScale, view.w / MOBILE.refViewW));
     this.CX = view.x + view.w / 2;
     this.CY = view.y + view.h / 2;
     this.scene = new THREE.Scene();
@@ -80,7 +85,11 @@ export class Pond {
     let arcMax = -Infinity;
     for (let i = 0; i <= 32; i++) arcMax = Math.max(arcMax, surfaceBottom(world.x + (world.w * i) / 32));
     const simWorld = { x: world.x, y: world.y, w: world.w, h: Math.min(world.h, arcMax + SIM.sponge + 80 - world.y) };
-    const sim = (this.sim = new WaterSim(simWorld, cellFor(simWorld, view.s, persp), persp));
+    const prof = this.mobile ? MOBILE : {};
+    const sim = (this.sim = new WaterSim(simWorld, cellFor(simWorld, view.s, persp, prof), persp, {
+      hz: prof.hz ?? SIM.hz,
+      speed: SIM.waveSpeed * this.objScale, // vật nhỏ lại thì sóng cũng lan chậm theo tỉ lệ, giữ cảm giác như máy tính
+    }));
     sim.setShore(surfaceInside); // dải hút sóng mượt phía trong mép (đo vuông góc), không dội
 
     this.zone = this.makeZone(world);
@@ -91,21 +100,21 @@ export class Pond {
     const place = this.place, scene = this.scene;
     this.leaves = new Leaves({
       models: this.assets.leaves, scene, view, sim, persp, centre: [this.CX, this.CY], squash: sq,
-      ambGain: this.ambGain, reduceMotion: this.reduceMotion, net: this.assets.net,
+      ambGain: this.ambGain, reduceMotion: this.reduceMotion, net: this.assets.net, scale: this.objScale,
     });
     this.ducks = new Ducks({
       scene, view, world, sim, persp, ambGain: this.ambGain, reduceMotion: this.reduceMotion, net: this.assets.net,
-      squash: this.assets.duck.squash, centre: [this.CX, this.CY], model: this.assets.duck.model,
+      squash: this.assets.duck.squash, centre: [this.CX, this.CY], model: this.assets.duck.model, scale: this.objScale,
       // vịt rũ nước: chỉ gợn mặt nước — KHÔNG bắn giọt (giọt nước trông như bong bóng lạ, chủ dự án bỏ 2026-10-06)
       splash: (ix, iy) => { this.sim.disturb(ix, iy, Math.max(14, this.screenPx(16)), -1.4); },
     });
     const A = this.assets;
     this.bubbles = A.bubbles.length && A.spark ? new Bubbles({
-      textures: A.bubbles, spark: A.spark, scene, place, view, reduceMotion: this.reduceMotion,
+      textures: A.bubbles, spark: A.spark, scene, place, view, reduceMotion: this.reduceMotion, scale: this.objScale,
       // bóng của cú bấm vỡ: gợn nhẹ mặt nước ở chỗ vỡ
       onPop: (x, y, r) => { if (this.inPond(x, y)) this.sim.disturb(x, y, Math.max(6, r * 0.6), -BUBBLES.tap.ripple); },
     }) : null;
-    this.sparkles = A.spark ? new Sparkles({ texture: A.spark, scene, place, view, reduceMotion: this.reduceMotion }) : null;
+    this.sparkles = A.spark ? new Sparkles({ texture: A.spark, scene, place, view, reduceMotion: this.reduceMotion, scale: this.objScale }) : null;
 
     if (this.opts.debug) this.setupDebug();
     this.renderer.setPixelRatio(this.pixelRatio);
@@ -157,6 +166,9 @@ export class Pond {
   rebuildIfNeeded() {
     const cw = this.el.clientWidth, ch = this.el.clientHeight;
     if (!cw || !ch || (cw === this.size[0] && ch === this.size[1])) return;
+    // Điện thoại: thanh địa chỉ ẩn/hiện chỉ đổi chiều cao một chút — không dựng lại cả cảnh (giật, mất sóng).
+    // Xoay máy hay đổi cỡ thật (bề ngang đổi, hoặc cao đổi > 15 %) mới dựng lại.
+    if (this.mobile && cw === this.size[0] && Math.abs(ch - this.size[1]) < this.size[1] * 0.15) return;
     this.teardown();
     this.build();
     this.acc = 0;
@@ -287,7 +299,8 @@ export class Pond {
       this.leaves.stampCover(this.sim);
       this.acc += dt;
       let n = 0;
-      while (this.acc >= 1 / SIM.hz && n < 6) { this.sim.step(); this.acc -= 1 / SIM.hz; n++; }
+      const dtSim = 1 / this.sim.hz;
+      while (this.acc >= dtSim && n < 6) { this.sim.step(); this.acc -= dtSim; n++; }
       if (n === 6) this.acc = 0;
       this.leaves.update(dt, t, this.sim);
       this.ambientDrops(dt);

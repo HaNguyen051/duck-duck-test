@@ -19,7 +19,7 @@ const wrap = (a) => { a %= TAU; return a < 0 ? a + TAU : a; };
 const delta = (a, b) => { const d = wrap(a - b); return d > Math.PI ? d - TAU : d; };
 
 export class Ducks {
-  constructor({ scene, view, world, sim, persp, ambGain, reduceMotion, squash, centre, model, splash, net }) {
+  constructor({ scene, view, world, sim, persp, ambGain, reduceMotion, squash, centre, model, splash, net, scale = 1 }) {
     this.V = view;
     this.persp = persp;
     this.splash = splash;
@@ -29,7 +29,9 @@ export class Ducks {
     this.centre = centre; // tâm khung nhìn (toạ độ ảnh) — shader cần để quy về toạ độ ảnh
     this.s = { h: 0, gx: 0, gy: 0 };
     this.w = { h: 0, gx: 0, gy: 0 };
-    this.scale = DUCKS.scale;
+    // scale: objScale của cảnh (điện thoại dọc < 1) — cỡ, vùng tiếp nước, biên bơi, tốc độ đều theo nó
+    this.scale = DUCKS.scale * scale;
+    this.speed = DUCKS.speed * scale; // vịt nhỏ thì bơi chậm theo, không vụt nhanh hơn thân mình
 
     // Mặt cắt thân ở mực nước (đo từ chính model): nửa trục dọc thân và ngang thân của elip tiếp nước.
     // Không có model (tải lỗi) thì ao không có vịt, mọi hàm bên dưới vẫn chạy với danh sách rỗng.
@@ -157,7 +159,7 @@ export class Ducks {
     if (it.held) {
       wantX = (it.tx - it.x) * DUCKS.dragFollow;
       wantY = (it.ty - it.y) * DUCKS.dragFollow;
-      const sp = Math.hypot(wantX, wantY), cap = DUCKS.speed * 3.4;
+      const sp = Math.hypot(wantX, wantY), cap = this.speed * 3.4;
       if (sp > cap) { wantX *= cap / sp; wantY *= cap / sp; }
     } else if (it.rest > 0) {
       it.rest -= dt;
@@ -174,8 +176,8 @@ export class Ducks {
         const [ux, uy] = this.dirOf(it.head);
         const ease = Math.max(0.15, Math.cos(Math.min(Math.abs(turn), Math.PI) * 0.5));
         const ps = this.persp.S(it.x, it.y); // xa (thấp trên màn hình) thì bơi chậm hơn trên màn hình
-        wantX = ux * DUCKS.speed * ease * ps;
-        wantY = uy * DUCKS.speed * ease * ps;
+        wantX = ux * this.speed * ease * ps;
+        wantY = uy * this.speed * ease * ps;
       }
     }
 
@@ -201,7 +203,7 @@ export class Ducks {
     if (it.y > yb) { it.y = yb; it.vy = -Math.abs(it.vy); }
 
     // Quẫy chân mạnh nhẹ theo tốc độ bơi: đứng nghỉ thì chỉ khẽ đạp giữ thăng bằng.
-    const wantPaddle = DUCK_MODEL.paddle * (0.3 + 0.7 * Math.min(1, sp / DUCKS.speed)) * (this.reduceMotion ? 0.4 : 1);
+    const wantPaddle = DUCK_MODEL.paddle * (0.3 + 0.7 * Math.min(1, sp / this.speed)) * (this.reduceMotion ? 0.4 : 1);
     it.paddle += (wantPaddle - it.paddle) * Math.min(1, dt * 3);
 
     // Thỉnh thoảng vẫy đuôi một đợt ngắn.
@@ -229,7 +231,7 @@ export class Ducks {
       it.wake = DUCKS.wakeEvery;
       const r = this.contact[0], ri = r * this.persp.S(it.x, it.y); // ri: lùi sau đuôi theo px ảnh; r: bán kính trên mặt nước
       const ux = it.vx / sp, uy = it.vy / sp;
-      const amt = Math.min(1, sp / DUCKS.speed) * DUCKS.wakeGain;
+      const amt = Math.min(1, sp / this.speed) * DUCKS.wakeGain;
       sim.disturb(it.x - ux * ri, it.y - uy * ri, r * 0.6, -amt);
     }
   }

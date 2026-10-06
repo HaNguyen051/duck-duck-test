@@ -29,16 +29,24 @@ function planeBox(world, persp) {
 }
 
 // Cỡ ô theo độ phóng s (px CSS / px ảnh): ở giữa khung (S ≈ 1) mỗi ô ≈ SIM.screenCell px CSS, không vượt SIM.maxCells ô.
-export function cellFor(world, s, persp) {
-  const box = planeBox(world, persp);
-  let cell = Math.min(SIM.maxCell, Math.max(SIM.minCell, Math.round(SIM.screenCell / s)));
-  while (Math.ceil(box.w / cell) * Math.ceil(box.h / cell) > SIM.maxCells) cell++;
+// prof: { screenCell, maxCells } đè lên SIM (hồ sơ điện thoại).
+export function cellFor(world, s, persp, prof = {}) {
+  const box = planeBox(world, persp), sc = prof.screenCell ?? SIM.screenCell, mc = prof.maxCells ?? SIM.maxCells;
+  let cell = Math.min(SIM.maxCell, Math.max(SIM.minCell, Math.round(sc / s)));
+  while (Math.ceil(box.w / cell) * Math.ceil(box.h / cell) > mc) cell++;
   return cell;
 }
 
 export class WaterSim {
-  constructor(world, cell, persp) {
+  // opts: { hz = SIM.hz, speed = SIM.waveSpeed } — số bước mỗi giây và tốc độ lan (đơn vị mặt nước/giây).
+  constructor(world, cell, persp, { hz = SIM.hz, speed = SIM.waveSpeed } = {}) {
     const box = planeBox(world, persp);
+    // Hằng số theo BƯỚC suy từ hằng số theo giây: C = (v·dt/ô)² (ổn định khi < 0,75); các hệ số tắt dần khai ở
+    // 120 Hz → lũy thừa 120/hz để mỗi giây tắt như nhau dù chạy 60 Hz.
+    this.hz = hz;
+    this.C = Math.min(0.7, (speed / (cell * hz)) ** 2);
+    const k = SIM.hz / hz;
+    this.damp = SIM.damp ** k; this.dampShore = SIM.dampShore ** k; this.dampEdge = SIM.dampEdge ** k; this.dampLeaf = SIM.dampLeaf ** k;
     this.persp = persp;
     this.sq = persp.sq;
     this.ox = box.X0; // gốc lưới trong toạ độ mặt phẳng nước
@@ -51,7 +59,7 @@ export class WaterSim {
     const n = this.cols * this.rows;
     this.cur = new Float32Array(n);
     this.prev = new Float32Array(n);
-    this.base = new Float32Array(n).fill(SIM.damp);
+    this.base = new Float32Array(n).fill(this.damp);
     this.cover = new Float32Array(n).fill(1);
     this.solid = new Uint8Array(n);
     this.half = new Uint16Array(n);
@@ -75,10 +83,10 @@ export class WaterSim {
       const i = gy * cols + gx;
       const [x, y] = persp.toImage(this.ox + (gx + 0.5) * cell, this.oy + (gy + 0.5) * cell);
       const t = Math.min(1, Math.max(0, inside(x, y) / band)), k = t * t * (3 - 2 * t);
-      let d = SIM.dampShore + (SIM.damp - SIM.dampShore) * k;
+      let d = this.dampShore + (this.damp - this.dampShore) * k;
       // càng sát mép lưới càng tắt nhanh, hạ mượt (smoothstep) để chính chỗ đổi hệ số không dội sóng
       const e = Math.min(gx, gy, cols - 1 - gx, rows - 1 - gy) / sp;
-      if (e < 1) { const t = e * e * (3 - 2 * e); d *= SIM.dampEdge / SIM.damp + (1 - SIM.dampEdge / SIM.damp) * t; }
+      if (e < 1) { const t = e * e * (3 - 2 * e); d *= this.dampEdge / this.damp + (1 - this.dampEdge / this.damp) * t; }
       this.base[i] = d;
     }
   }
@@ -114,7 +122,7 @@ export class WaterSim {
   // Mặt lá làm sóng yếu đi bên dưới: đĩa bán kính r trên mặt nước.
   coverDisc(ix, iy, r) {
     const cover = this.cover;
-    this.forEllipse(ix, iy, r, r, 0, (i) => { cover[i] = SIM.dampLeaf; });
+    this.forEllipse(ix, iy, r, r, 0, (i) => { cover[i] = this.dampLeaf; });
   }
 
   // Điểm có nằm trong vùng chắn không (dùng để lá không trôi xuyên qua vịt).
@@ -132,7 +140,7 @@ export class WaterSim {
   // Phương trình sóng với Laplace 9 điểm: vòng sóng tròn đều, không méo vuông như bản 4 điểm.
   step() {
     const { cols, rows, cur, prev, base, cover, solid } = this;
-    const C = SIM.waveC; // (vận tốc sóng · dt / ô)², ổn định khi < 0.75
+    const C = this.C; // (vận tốc sóng · dt / ô)², tính sẵn trong constructor
     for (let y = 1; y < rows - 1; y++) {
       let i = y * cols + 1;
       for (let x = 1; x < cols - 1; x++, i++) {

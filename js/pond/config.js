@@ -303,13 +303,25 @@ export const Z = { stem: -12, water: 0, ring: 0.8, leaf: 20, duck: 86, dropMin: 
 export const CAMERA = { D: 1500, max: 210, ease: 4.5 };
 
 // Lưới mô phỏng sóng. Cỡ ô tính theo độ phóng để trên màn hình mỗi ô ≈ screenCell px CSS.
+// Điện thoại (2026-10-06, "chạy trên điện thoại rất xấu"). Màn dọc giữ khung cắt cover (chủ dự án chọn) nhưng
+// THU NHỎ vật thể theo objScale = clamp(view.w / refViewW, minScale, 1): ở 390×844 view.w ≈ 500 px ảnh → ~0,64,
+// vịt ≈ 30 % bề ngang màn hình (trước ~45–50 %). Máy tính / màn ngang view.w = 1920 → 1, không đổi.
+// Hồ sơ hiệu năng (máy cảm ứng hoặc màn nhỏ): sóng 60 Hz, ô ≈ screenCell px CSS, trần maxCells ô.
+export const MOBILE = { refViewW: 780, minScale: 0.55, hz: 60, screenCell: 6, maxCells: 120000 };
+export const isMobileDevice = () =>
+  (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) || Math.min(screen.width, screen.height) < 700;
+
 export const SIM = {
   screenCell: 4.4,
   minCell: 3,
   maxCell: 12,
   maxCells: 300000, // lưới nằm trên mặt nước phối cảnh: phần dưới (xa) rộng và dày hơn — cho thêm ô kẻo phần trên (gần, phóng to) thô
-  waveC: 0.1035, // (vận tốc sóng · dt / ô)², ổn định khi < 0.75. Tốc độ lan ∝ √waveC. Chủ dự án giảm hai lần (2026-10-06): −20 % (0,33 → 0,2112) rồi −30 % nữa (× 0,7² → 0,1035); chung cho mọi nguồn sóng vì cả ao là một mặt nước
-  hz: 120,
+  // Tốc độ lan sóng tính theo GIÂY (đơn vị mặt nước/giây), không theo bước: hằng số mỗi bước C = (v·dt/ô)² do
+  // WaterSim tự tính từ cỡ ô và hz thật, nên cửa sổ to nhỏ, máy tính hay điện thoại (60 Hz, ô to hơn) đều lan cùng
+  // tốc độ (bản trước khai waveC theo bước nên tốc độ đổi theo cỡ ô). 270 = mức chủ dự án chốt 2026-10-06
+  // (waveC 0,1035 ở ô 7 px, 120 Hz — đã giảm hai lần: −20 % rồi −30 %). Trên điện thoại nhân thêm objScale.
+  waveSpeed: 270,
+  hz: 120, // số bước mô phỏng mỗi giây trên máy tính (điện thoại: MOBILE.hz); các hệ số damp* dưới đây là theo bước ở 120 Hz
   damp: 0.9915, // tắt dần nhanh hơn: vịt bơi liên tục nên sóng cũ phải tan kịp
   dampLeaf: 0.95, // thêm tắt dần dưới lá (chỉ mặt lá, không tính cuống)
   // Mép vùng mặt nước (cung SURFACE.arc) không phải tường: trong `shoreBand` px ảnh cuối trước khi tới cung, hệ số

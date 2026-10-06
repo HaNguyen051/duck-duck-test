@@ -20,6 +20,10 @@ export class PondInput {
     el.addEventListener('lostpointercapture', (e) => this.onUp(e));
     el.addEventListener('pointerleave', () => { if (!this.active) this.setCursor(''); });
     el.addEventListener('contextmenu', (e) => e.preventDefault());
+    // iPhone: có bản Safari chỉ mở âm thanh trong touchend / click (pointerdown chưa đủ) — gọi thêm ở đó.
+    const unlock = () => this.pond.audio?.unlock();
+    el.addEventListener('touchend', unlock, { passive: true });
+    el.addEventListener('click', unlock);
   }
 
   setCursor(c) {
@@ -58,8 +62,14 @@ export class PondInput {
   onDown(e) {
     if (this.active || (e.button !== undefined && e.button > 0)) return;
     this.pond.audio?.unlock(); // cử chỉ đầu tiên: mở âm thanh, bật nhạc nền
+    // Điện thoại: chạm đầu tiên xin toàn màn hình (ẩn thanh địa chỉ). Android Chrome được; iPhone Safari không hỗ trợ
+    // cho trang thường nên lệnh im lặng bỏ qua. Chỉ xin một lần.
+    if (e.pointerType === 'touch' && !this.askedFullscreen) {
+      this.askedFullscreen = true;
+      document.documentElement.requestFullscreen?.({ navigationUI: 'hide' })?.catch?.(() => {});
+    }
     // Bong bóng: bấm là nổ (kèm tiếng nổ). Xét trước vùng mặt nước vì bóng nổi cả ở nước sâu phía dưới.
-    const bubble = this.pond.bubbles?.pickAt(e.clientX, e.clientY, this.pond);
+    const bubble = this.pond.bubbles?.pickAt(e.clientX, e.clientY, this.pond, e.pointerType !== 'mouse');
     if (bubble) {
       e.preventDefault();
       this.pond.bubbles.pop(bubble, 1.35);

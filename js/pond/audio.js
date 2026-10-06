@@ -38,11 +38,18 @@ export class PondAudio {
     }
   }
 
-  // Gọi ngay trong xử lý cử chỉ đầu tiên (pointerdown): mở AudioContext và bật nhạc nền.
+  // Gọi trong xử lý cử chỉ (pointerdown, và thêm touchend / click — input.js): mở AudioContext và bật nhạc nền.
+  // Gọi lặp được: context đã chạy thì thôi. iPhone (Safari) có bản chỉ cho mở âm thanh trong touchend/click và cần
+  // phát một buffer câm ngay trong cử chỉ — thiếu thì tiếng nổ bong bóng, quạc, nhạc nền đều câm.
   unlock() {
-    if (!this.ctx || this.started) return;
-    this.started = true;
-    this.ctx.resume().then(() => this.startMusic()).catch(() => {});
+    if (!this.ctx || this.ctx.state === 'running') return;
+    try {
+      const s = this.ctx.createBufferSource();
+      s.buffer = this.ctx.createBuffer(1, 1, this.ctx.sampleRate);
+      s.connect(this.ctx.destination);
+      s.start(0);
+    } catch { /* bỏ qua */ }
+    this.ctx.resume().then(() => { this.started = true; this.startMusic(); }).catch(() => {});
   }
 
   startMusic() {
