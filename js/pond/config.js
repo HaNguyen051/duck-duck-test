@@ -141,28 +141,35 @@ export const DEEP_FLOW = {
   patch: { amp: 0.12, scale: 520, speed: 0.05 },
 };
 
-// Cây trong nền chuyển động theo 3 LỚP (bản mô tả của chủ dự án, 2026-10-06; water.js bước 1c). Chỉ CÂY (mặt nạ tách
-// theo màu từ bg.webp lúc nạp — không có lớp cây riêng), trời mây đứng yên; mọi chỗ có cây kể cả nước sâu.
-// Lớp chia mềm từ mặt nạ: fore = cành dày sát mép khung (trong `edge` px tính từ mép trái/phải/đáy), tip = lá mỏng
-// giáp trời, mid = phần còn lại (vòm tán). fore/mid XOAY quanh gốc cành (chỗ tia tâm trời → điểm cắt mép khung) góc
-// deg (°, mỗi cụm một mức trong khoảng); mid thêm tịnh tiến shift px; tip chỉ rung tịnh tiến. period: chu kỳ (s).
-// cap: trần độ dời mọi lớp (px) — số góc theo bản mô tả (±2,5° ở cành dài ~500 px ≈ 20 px) nhưng chặn ở mức chủ dự
-// án đã chỉnh (14) để ảnh không kéo giãn lộ. delay: trễ pha giữa các cụm (s); wind: làn gió lướt ngang (px/s) cho
-// trái phải lệch pha. gust: thỉnh thoảng một cơn mạnh hơn. sheen: lá đón nắng nhấp nháy độ sáng min → 1.
-// Không làm lá rơi (đã hỏi, chủ dự án bỏ). key/blur/tipBlur: tách cây theo màu — xem foliageMask (assets.js).
+// Cây trong nền chuyển động theo 4 LỚP (bản mô tả thứ hai của chủ dự án, 2026-10-06; water.js bước 1c, 1d). Chỉ CÂY
+// (mặt nạ tách theo màu từ bg.webp lúc nạp — không có lớp cây riêng), trời mây đứng yên. Bản mô tả viết cho CSS/GSAP,
+// nhưng nền là một ảnh WebGL nên lớp chia mềm trong shader, mỗi lớp chu kỳ `period` (s) và trễ `delay` (s) riêng:
+//   fore   L1 — cây lớn góc trên trái/phải (vùng `corner`: y < top, cách mép bên < side; px ảnh, nhạt dần trong khoảng):
+//            xoay ±deg° quanh gốc cành phía mép ngoài + tịnh tiến shift px;
+//   side   L2 — tán dọc hai sườn trái/phải (phần cây còn lại): xoay ±deg° + shift px;
+//   lower  L3 — vòng cây đáy hồ (thấp hơn `y`, hoặc ở vùng nước sâu): dập dềnh shift px;
+//   fringe L4 — chồi lá sát khoảng trời: rung shift px + trong suốt opacity → 1 theo caustics của mặt nước.
+// cap: trần độ dời (px) — 20 để L2 đạt đủ ±2° + 7 px ở cành dài (bản 3 lớp chặn 14). jitter: lệch pha theo cụm trong
+// cùng lớp (s); wind: làn gió lướt ngang (px/s); gust: thỉnh thoảng một cơn mạnh hơn. Đã bỏ ánh sáng le lói trên tán.
+// key/blur/tipBlur/skyLum/skyBlur: tách cây theo màu và tìm vùng trời — xem foliageMask (assets.js).
 export const FOLIAGE = {
-  cap: 14,
-  centre: [1000, 330], wind: 650,
-  delay: [0.5, 2.5],
+  cap: 20,
+  centre: [1000, 330], wind: 650, jitter: 0.4,
   gust: { every: 9, amt: 0.6 },
-  fore: { deg: [0.5, 1.5], period: 7, edge: 260 },
-  mid: { deg: [1, 2.5], shift: [2, 5], period: 5 },
-  tip: { shift: [2, 3], period: 2.8 },
-  sheen: { min: 0.95 },
+  corner: { top: [220, 420], side: [380, 620] },
+  fore: { deg: 0.8, shift: [2, 3], period: 8, delay: 0 },
+  side: { deg: 2, shift: [5, 7], period: 5.5, delay: 1.5 },
+  lower: { shift: [2, 3], period: 4.5, delay: 0.8, y: [620, 780] }, // y: cây thấp hơn khoảng này (px ảnh) là đáy hồ
+  fringe: { shift: [1, 2], period: 3, delay: 0.3, opacity: 0.85 },
+  // Tách cụm (chủ dự án: mảng cây lắc "cùng một mảng", rồi "vẫn chưa đủ tách"): cây chia thành các Ô riêng biệt cỡ
+  // `size` px (tổ ong ngẫu nhiên), mỗi ô nhịp ngẫu nhiên hoàn toàn, lệch hướng ±`turn`°, biên độ × amp — áp cho cả 4
+  // lớp. `blend`: độ rộng dải hoà giáp ranh (theo cỡ ô); nhỏ thì tách rõ hơn nhưng dải giáp ranh dễ bị kéo giãn.
+  cluster: { size: 170, blend: 0.32, amp: [0.6, 1.2], turn: 35 },
   key: { lo: 0.02, hi: 0.12, sLo: 0.15, sHi: 0.35 },
   blur: 12, tipBlur: 120,
   skyLum: 0.5, skyBlur: 90, // vùng trời: không phải cây mà sáng hơn skyLum, nối liền tâm; làm mờ skyBlur px → lá viền
 };
+
 
 
 export const RAYS = { amp: 0.05, perp: [0.91, 0.42], waves: [[140, 9], [310, -6]] }; // [bước sóng px, tốc độ px/s]
