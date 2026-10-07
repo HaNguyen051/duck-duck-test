@@ -87,7 +87,7 @@ export class PondInput {
     if (hit.type === 'duck') {
       this.pond.audio?.quack(); // bấm vịt: quạc
       this.pond.ducks.grab(hit.index, hit.ix, hit.iy);
-      this.active = { id: e.pointerId, mode: 'duck', duck: hit.index };
+      this.active = { id: e.pointerId, mode: 'duck', duck: this.pond.ducks.items[hit.index] }; // giữ chính con vịt, không giữ chỉ số
       this.setCursor('grabbing');
     } else if (hit.type === 'leaf') {
       this.pond.leaves.grab(hit.leaf, hit.ix, hit.iy, this.pond.sim);

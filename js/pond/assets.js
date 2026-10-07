@@ -2,7 +2,7 @@
 // bong bóng) rasterize thành texture, độ ép dẹt `squash` từ file AI cũ (images-duck-v2/manifest.json), model 3D
 // cho vịt và lá. prepareAssets chạy một lần lúc mở trang.
 import * as THREE from 'three';
-import { MANIFEST, BG, NET, BUBBLES, SPARKLES, FOLIAGE } from './config.js';
+import { MANIFEST, BG, NET, BUBBLES, SPARKLES, FOLIAGE, LEAVES } from './config.js';
 import { loadDuckModel } from './duck3d.js';
 import { loadLeafModels } from './leaf3d.js';
 
@@ -181,7 +181,7 @@ export async function prepareAssets() {
   const bgP = bgImgP.then(imageTexture);
   const foliageP = bgImgP.then(foliageMask).catch(warn('mặt nạ cây'));
   const modelP = loadDuckModel().catch(warn('model vịt'));
-  const leavesP = loadLeafModels().catch(warn('model lá', []));
+  const leavesP = LEAVES.enabled ? loadLeafModels().catch(warn('model lá', [])) : Promise.resolve([]);
   const netP = !NET.enabled ? Promise.resolve(null) : rasterSvg(NET.url, NET.texW).then((c) => {
     const t = makeTexture(makeTileable(c, Math.round(c.width * 0.12)));
     t.wrapS = t.wrapT = THREE.RepeatWrapping; // lưới lấy mẫu trên mặt phẳng nước rộng hơn một bản nên lặp

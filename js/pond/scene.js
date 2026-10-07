@@ -2,7 +2,7 @@
 // hồ lên (gói art 10/2026): mặt nước là vùng trên cung SURFACE.arc, dưới là nước sâu có bong bóng và sao.
 // Khung nhìn (toạ độ ảnh) phủ kín màn hình theo kiểu cover; đổi cỡ màn hình thì dựng lại cảnh.
 import * as THREE from 'three';
-import { CAMERA, SIM, Z, AMBIENT_GAIN, LAYOUT, PERSPECTIVE, SURFACE, computeView, surfacePath, surfaceBottom, surfaceInside, BUBBLES, DEEP_FLOW, MOBILE, isMobileDevice } from './config.js';
+import { CAMERA, SIM, Z, AMBIENT_GAIN, LAYOUT, PERSPECTIVE, SURFACE, computeView, surfacePath, surfaceBottom, surfaceInside, BUBBLES, DEEP_FLOW, MOBILE, isMobileDevice, DUCKS } from './config.js';
 import { Persp } from './persp.js';
 import { prepareAssets, dataTexture } from './assets.js';
 import { WaterSim, cellFor } from './watersim.js';
@@ -44,6 +44,10 @@ export class Pond {
     this.pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
     this.mobile = isMobileDevice(); // hồ sơ hiệu năng điện thoại (config MOBILE)
     this.builds = 0;
+    // số vịt người dùng chọn bằng nút + / − (ui.js): giữ qua các lần dựng lại cảnh; trần theo máy
+    this.maxDucks = this.mobile ? DUCKS.max.mobile : DUCKS.max.desktop;
+    this.duckCount = Math.min(DUCKS.count, this.maxDucks);
+    this.onDuckCount = null; // ui.js gắn vào để làm mờ nút khi hết số
     this.perf = { frames: 0, time: 0 };
     this.place = this.place.bind(this);
 
@@ -104,7 +108,7 @@ export class Pond {
     });
     this.ducks = new Ducks({
       scene, view, world, sim, persp, ambGain: this.ambGain, reduceMotion: this.reduceMotion, net: this.assets.net,
-      squash: this.assets.duck.squash, centre: [this.CX, this.CY], model: this.assets.duck.model, scale: this.objScale,
+      squash: this.assets.duck.squash, centre: [this.CX, this.CY], model: this.assets.duck.model, scale: this.objScale, count: this.duckCount,
       // vịt rũ nước: chỉ gợn mặt nước — KHÔNG bắn giọt (giọt nước trông như bong bóng lạ, chủ dự án bỏ 2026-10-06)
       splash: (ix, iy) => { this.sim.disturb(ix, iy, Math.max(14, this.screenPx(16)), -1.4); },
     });
@@ -226,6 +230,35 @@ export class Pond {
   }
 
   touch() { this.lastInput = this.t; }
+
+  // Nút + : một con vịt rơi xuống chỗ trống — vòng sóng lớn, vài bong bóng, tiếng quạc. Trả về false nếu hết số.
+  addDuck() {
+    if (this.duckCount >= this.maxDucks || !this.assets.duck.model) return false;
+    const it = this.ducks.add();
+    if (!it) return false;
+    this.duckCount++;
+    const g = this.reduceMotion ? 0.6 : 1;
+    this.sim.disturb(it.x, it.y, Math.max(20, this.screenPx(26)) * this.objScale, -9 * g);
+    this.bubbles?.spawnAt(it.x, it.y);
+    this.bubbles?.spawnAt(it.x + this.screenPx(20), it.y);
+    this.audio?.quack();
+    this.touch();
+    this.onDuckCount?.(this.duckCount, this.maxDucks);
+    return true;
+  }
+
+  // Nút − : con mới nhất (không đang bị cầm) lặn xuống, gợn sóng nhẹ. Luôn chừa ít nhất 1 con.
+  removeDuck() {
+    if (this.duckCount <= 1) return false;
+    const it = this.ducks.remove();
+    if (!it) return false;
+    this.duckCount--;
+    this.sim.disturb(it.x, it.y, Math.max(14, this.screenPx(18)) * this.objScale, -3);
+    this.audio?.touch();
+    this.touch();
+    this.onDuckCount?.(this.duckCount, this.maxDucks);
+    return true;
+  }
 
   // Con trỏ đang ở đâu trên mặt phẳng của vịt — để vịt ngó theo. Ghi kèm thời điểm để hết hạn.
   pointerAt(clientX, clientY) {

@@ -19,7 +19,8 @@ const wrap = (a) => { a %= TAU; return a < 0 ? a + TAU : a; };
 const delta = (a, b) => { const d = wrap(a - b); return d > Math.PI ? d - TAU : d; };
 
 export class Ducks {
-  constructor({ scene, view, world, sim, persp, ambGain, reduceMotion, squash, centre, model, splash, net, scale = 1 }) {
+  constructor({ scene, view, world, sim, persp, ambGain, reduceMotion, squash, centre, model, splash, net, scale = 1, count = DUCKS.count }) {
+    this.scene = scene; this.sim = sim; this.net = net; // giữ lại để thêm vịt sau (add)
     this.V = view;
     this.persp = persp;
     this.splash = splash;
@@ -52,52 +53,98 @@ export class Ducks {
     this.bounds = B;
 
     this.items = [];
-    let it_mesh = null;
-    for (let k = 0; k < (model ? DUCKS.count : 0); k++) {
-      const mat = duckMaterial(model, ambGain);
-      bindFloater(mat, { sim, centre, squash: this.squash, net, reduceMotion }); // lưới sóng + khung nhìn + lưới sóng trắng phủ phần nổi
-      mat.uniforms.uPhase.value = rand(0, TAU); // hai con không quẫy đồng nhịp
-      const mesh = new THREE.Mesh(this.geo, mat);
-      // Thứ tự vẽ (renderOrder) do scene.js xếp theo trục y chung với lá, đặt trên MESH chứ không trên
-      // Group: renderOrder của Group thành groupOrder, xếp trước mọi renderOrder lẻ nên vịt sẽ đè lên cả
-      // giọt nước (20000/30000). Mỗi vật tự xoá bộ đệm độ sâu trước khi vẽ: độ sâu chỉ để con vịt tự che
-      // chính nó; chồng lớp giữa các vật là theo y, không so độ sâu (đầu vịt nghiêng ra xa, so độ sâu thì
-      // lá ở trước che mất đầu).
-      mesh.renderOrder = 100 + k;
-      mesh.onBeforeRender = (renderer) => renderer.clearDepth();
-      it_mesh = mesh;
-      // root (vị trí, cỡ) → tilt (nghiêng 23° theo mặt nước) → yaw (hướng bơi) → lean (nghiêng theo sóng,
-      // vào khúc rẽ, lắc khi rũ nước; thở bằng scale) → mesh
-      const lean = new THREE.Group(); lean.add(mesh);
-      const yaw = new THREE.Group(); yaw.add(lean);
-      const tilt = new THREE.Group(); tilt.add(yaw);
-      tilt.rotation.x = -Math.asin(this.squash); // nghiêng cho khớp độ ép dẹt của mặt nước
-      const root = new THREE.Group(); root.add(tilt);
-      scene.add(root);
-
-      const it = {
-        root, yaw, lean, mat, mesh: it_mesh,
-        x: view.x + view.w * (k === 0 ? 0.34 : 0.66),
-        y: view.y + view.h * (k === 0 ? 0.44 : 0.56),
-        vx: 0, vy: 0,
-        head: rand(0, TAU),
-        goal: null, rest: rand(0.4, 2),
-        held: false, tx: 0, ty: 0, grabX: 0, grabY: 0,
-        bob: 0, wake: 0, paddle: DUCK_MODEL.paddle * 0.3,
-        tailNext: rand(...DUCK_MODEL.tail.every), tailT: -1, // lịch vẫy đuôi: đếm ngược tới đợt sau, thời gian trong đợt
-        phase: rand(0, TAU),
-        // đầu: góc hiện tại, hướng ngó tự nhiên và lịch đổi hướng, góc còn phải rẽ (để quay đầu trước)
-        headYaw: 0, headPitch: 0, lookYaw: 0, lookPitch: 0, lookNext: rand(0.5, 2), turnLeft: 0,
-        // thân: nghiêng hiện tại, tốc độ rẽ (để nghiêng vào khúc rẽ), hướng khung trước
-        roll: 0, pitch: 0, yawRate: 0, prevHead: 0,
-        // rũ nước: thời gian trong đợt (−1 = không), đếm ngược tới đợt sau, đếm ngược sau khi được thả
-        shakeT: -1, shakeNext: rand(...DUCKS.shake.every), shakeAfter: -1,
-      };
-      it.prevHead = it.head;
-      this.items.push(it);
-      this.pickGoal(it);
+    for (let k = 0; k < (model ? count : 0); k++) {
+      // hai con đầu ở chỗ quen (trái-giữa, phải-giữa); các con thêm tìm chỗ trống
+      const [x, y] = k < 2 ? [view.x + view.w * (k === 0 ? 0.34 : 0.66), view.y + view.h * (k === 0 ? 0.44 : 0.56)] : this.freeSpot();
+      this.makeItem(x, y);
     }
   }
+
+  // Dựng một con vịt ở (x, y) toạ độ ảnh và thêm vào danh sách.
+  makeItem(x, y) {
+    const model = this.model, centre = this.centre;
+    const mat = duckMaterial(model, this.ambGain);
+    bindFloater(mat, { sim: this.sim, centre, squash: this.squash, net: this.net, reduceMotion: this.reduceMotion }); // lưới sóng + khung nhìn + lưới sóng trắng phủ phần nổi
+    mat.uniforms.uPhase.value = rand(0, TAU); // các con không quẫy đồng nhịp
+    const mesh = new THREE.Mesh(this.geo, mat);
+    // Thứ tự vẽ (renderOrder) do scene.js xếp theo trục y chung với lá, đặt trên MESH chứ không trên
+    // Group: renderOrder của Group thành groupOrder, xếp trước mọi renderOrder lẻ nên vịt sẽ đè lên cả
+    // giọt nước (20000/30000). Mỗi vật tự xoá bộ đệm độ sâu trước khi vẽ: độ sâu chỉ để con vịt tự che
+    // chính nó; chồng lớp giữa các vật là theo y, không so độ sâu (đầu vịt nghiêng ra xa, so độ sâu thì
+    // lá ở trước che mất đầu).
+    mesh.renderOrder = 100 + this.items.length;
+    mesh.onBeforeRender = (renderer) => renderer.clearDepth();
+    // root (vị trí, cỡ) → tilt (nghiêng 23° theo mặt nước) → yaw (hướng bơi) → lean (nghiêng theo sóng,
+    // vào khúc rẽ, lắc khi rũ nước; thở bằng scale) → mesh
+    const lean = new THREE.Group(); lean.add(mesh);
+    const yaw = new THREE.Group(); yaw.add(lean);
+    const tilt = new THREE.Group(); tilt.add(yaw);
+    tilt.rotation.x = -Math.asin(this.squash); // nghiêng cho khớp độ ép dẹt của mặt nước
+    const root = new THREE.Group(); root.add(tilt);
+    this.scene.add(root);
+
+    const it = {
+      root, yaw, lean, mat, mesh,
+      x, y,
+      vx: 0, vy: 0,
+      head: rand(0, TAU),
+      goal: null, rest: rand(0.4, 2),
+      held: false, tx: 0, ty: 0, grabX: 0, grabY: 0,
+      bob: 0, wake: 0, paddle: DUCK_MODEL.paddle * 0.3,
+      tailNext: rand(...DUCK_MODEL.tail.every), tailT: -1, // lịch vẫy đuôi: đếm ngược tới đợt sau, thời gian trong đợt
+      phase: rand(0, TAU),
+      // đầu: góc hiện tại, hướng ngó tự nhiên và lịch đổi hướng, góc còn phải rẽ (để quay đầu trước)
+      headYaw: 0, headPitch: 0, lookYaw: 0, lookPitch: 0, lookNext: rand(0.5, 2), turnLeft: 0,
+      // thân: nghiêng hiện tại, tốc độ rẽ (để nghiêng vào khúc rẽ), hướng khung trước
+      roll: 0, pitch: 0, yawRate: 0, prevHead: 0,
+      // rũ nước: thời gian trong đợt (−1 = không), đếm ngược tới đợt sau, đếm ngược sau khi được thả
+      shakeT: -1, shakeNext: rand(...DUCKS.shake.every), shakeAfter: -1,
+      // vào / ra ao (nút + / −): thời gian từ lúc rơi xuống nước, lúc bắt đầu lặn đi (−1 = không); hệ số cỡ
+      enterT: -1, leaveT: -1, pop: 1,
+      bumpCD: 0, // thời gian hồi sau khi chạm con khác (bump)
+    };
+    it.prevHead = it.head;
+    this.items.push(it);
+    this.pickGoal(it);
+    return it;
+  }
+
+  // Chỗ trống trên mặt nước cho vịt mới: thử nhiều điểm trong biên bơi, lấy điểm xa các con khác nhất (đo trên màn
+  // hình như separate()).
+  freeSpot() {
+    const B = this.bounds, m = DUCKS.pickMargin * 0.5, others = this.items.filter((q) => q.leaveT < 0);
+    let best = [(B.x0 + B.x1) / 2, (B.y0 + B.y1) / 2], bestD = -1;
+    for (let i = 0; i < 60; i++) {
+      const x = rand(B.x0 + m, B.x1 - m), yb = Math.min(B.y1 - m, this.zoneBottom(x) - m);
+      if (yb <= B.y0 + m) continue;
+      const y = rand(B.y0 + m, yb);
+      let d = Infinity;
+      for (const q of others) d = Math.min(d, Math.hypot(q.x - x, (q.y - y) * 0.8));
+      if (d > bestD) { bestD = d; best = [x, y]; }
+    }
+    return best;
+  }
+
+  // Nút + (scene.addDuck): một con rơi xuống chỗ trống. Trả về con mới (scene.js làm sóng, bóng, tiếng quạc).
+  add() {
+    if (!this.model) return null;
+    const [x, y] = this.freeSpot();
+    const it = this.makeItem(x, y);
+    it.enterT = 0; it.pop = DUCKS.enter.from; it.rest = DUCKS.enter.dur + rand(0.2, 0.8);
+    return it;
+  }
+
+  // Nút − (scene.removeDuck): con mới nhất không đang bị cầm lặn xuống rồi biến mất. Trả về con đó.
+  remove() {
+    for (let k = this.items.length - 1; k >= 0; k--) {
+      const it = this.items[k];
+      if (!it.held && it.leaveT < 0) { it.leaveT = 0; it.goal = null; it.rest = 99; return it; }
+    }
+    return null;
+  }
+
+  // Số con đang ở lại ao (không tính con đang lặn đi).
+  get count() { return this.items.filter((it) => it.leaveT < 0).length; }
 
   /* -------------------------------------------------------------- hướng */
   // Vector di chuyển trên màn hình → hướng trên mặt nước (bù lại độ ép dẹt).
@@ -125,13 +172,39 @@ export class Ducks {
   update(t, dt, sim, pointer) {
     sim.clearSolid();
     if (dt > 0) {
-      for (const it of this.items) this.drive(it, t, dt, sim);
+      for (const it of this.items) { this.drive(it, t, dt, sim); if (it.bumpCD > 0) it.bumpCD -= dt; }
       this.separate();
       for (const it of this.items) this.animate(it, t, dt, pointer);
+      this.enterLeave(dt);
     }
     for (const it of this.items) {
       this.draw(it, t, sim);
-      sim.stampEllipse(it.x, it.y, this.contact[0], this.contact[1], it.head); // nửa trục trên mặt nước, phối cảnh do lưới lo
+      if (it.leaveT < 0) sim.stampEllipse(it.x, it.y, this.contact[0], this.contact[1], it.head); // nửa trục trên mặt nước, phối cảnh do lưới lo
+    }
+  }
+
+  // Vào / ra ao: rơi xuống thì cỡ bật từ DUCKS.enter.from lên quá 1 một chút rồi về 1 (nhún nước); lặn đi thì co về 0
+  // nhanh dần rồi gỡ khỏi cảnh, trả vật liệu.
+  enterLeave(dt) {
+    const E = DUCKS.enter, L = DUCKS.leave;
+    for (let k = this.items.length - 1; k >= 0; k--) {
+      const it = this.items[k];
+      if (it.enterT >= 0) {
+        it.enterT += dt;
+        const u = Math.min(1, it.enterT / E.dur), c = 1.70158 * 1.4; // easeOutBack
+        it.pop = E.from + (1 - E.from) * (1 + (c + 1) * (u - 1) ** 3 + c * (u - 1) ** 2);
+        if (u >= 1) { it.enterT = -1; it.pop = 1; }
+      }
+      if (it.leaveT >= 0) {
+        it.leaveT += dt;
+        const u = Math.min(1, it.leaveT / L.dur);
+        it.pop = 1 - u * u;
+        if (u >= 1) {
+          this.scene.remove(it.root);
+          it.mat.dispose();
+          this.items.splice(k, 1);
+        }
+      }
     }
   }
 
@@ -139,10 +212,13 @@ export class Ducks {
   // phẳng nước — con vịt cao gần 400 px trên màn hình trong khi elip tiếp nước chỉ dẹt 100 px, nên "không
   // chạm nhau trên mặt nước" vẫn là con này đè kín con kia. Chiều dọc còn tính nhẹ đi (kY < 1) vì vịt
   // cao hơn rộng: xếp trên–dưới phải cách xa hơn xếp ngang. Con đang bị kéo đứng yên, con kia nhường.
+  // DUCKS.separation: 1,5 cũ để hai con cách nhau hơn cả thân; 1,05 (−30 %, chủ dự án 2026-10-07 khi cho thêm vịt) cho
+  // bơi sát hơn, có thể chồng mép (con cao hơn trên màn hình đè lên — Y-sort) nhưng không con nào che kín con kia.
   separate() {
-    const minD0 = (this.contact[0] + this.contact[1]) * 1.5, kY = 0.8;
+    const minD0 = (this.contact[0] + this.contact[1]) * DUCKS.separation, kY = 0.8;
     for (let i = 0; i < this.items.length; i++) for (let j = i + 1; j < this.items.length; j++) {
       const p = this.items[i], q = this.items[j];
+      if (p.leaveT >= 0 || q.leaveT >= 0) continue;
       const minD = minD0 * (this.persp.S(p.x, p.y) + this.persp.S(q.x, q.y)) * 0.5;
       const dx = q.x - p.x, dy = (q.y - p.y) * kY, d = Math.hypot(dx, dy) || 1;
       if (d >= minD) continue;
@@ -150,7 +226,40 @@ export class Ducks {
       const wp = p.held ? 0 : q.held ? 1 : 0.5, wq = q.held ? 0 : p.held ? 1 : 0.5;
       p.x -= ux * gap * wp; p.y -= uy * gap * wp;
       q.x += ux * gap * wq; q.y += uy * gap * wq;
+      this.bump(p, q, -ux, -uy);
+      this.bump(q, p, ux, uy);
     }
+  }
+
+  // Chạm con khác (2026-10-07, chủ dự án: "khi vịt chạm nhau nó sẽ chuyển hướng khác để đi"): nảy lùi nhẹ, chọn đích
+  // mới về phía NGƯỢC con kia (lệch ngẫu nhiên ±DUCKS.bump.spread°) — kể cả con đang nghỉ; gợn nhỏ ở chỗ chạm. Có thời
+  // gian hồi để hai con đang tách nhau không đổi hướng liên tục. Con đang bị kéo không đổi gì.
+  bump(it, other, ax, ay) {
+    if (it.held || it.leaveT >= 0 || it.bumpCD > 0) return;
+    const Bp = DUCKS.bump, ps = this.persp.S(it.x, it.y);
+    it.bumpCD = Bp.cooldown;
+    it.vx += ax * Bp.bounce * ps; it.vy += ay * Bp.bounce * ps;
+    this.pickGoalAway(it, ax, ay);
+    it.rest = 0;
+    if (!other.held && other.bumpCD > 0 && other.bumpCD > Bp.cooldown - 0.05) {
+      // con kia vừa phản ứng trong cùng khung → gợn một lần ở giữa hai con
+      this.sim?.disturb((it.x + other.x) / 2, (it.y + other.y) / 2, this.contact[1] * 0.8, -Bp.ripple);
+    }
+  }
+
+  // Đích mới lệch không quá ±spread° khỏi hướng (ax, ay) (màn hình), đủ xa; không tìm được thì đi thẳng hướng ấy.
+  pickGoalAway(it, ax, ay) {
+    const B = this.bounds, m = DUCKS.pickMargin * 0.5, cosMax = Math.cos((DUCKS.bump.spread * Math.PI) / 180);
+    const al = Math.hypot(ax, ay) || 1; ax /= al; ay /= al;
+    for (let i = 0; i < 50; i++) {
+      const gx = rand(B.x0 + m, B.x1 - m), yb = Math.min(B.y1 - m, this.zoneBottom(gx) - m);
+      if (yb <= B.y0 + m) continue;
+      const gy = rand(B.y0 + m, yb), vx = gx - it.x, vy = gy - it.y, vl = Math.hypot(vx, vy);
+      if (vl < DUCKS.minTrip * 0.5) continue;
+      if ((vx * ax + vy * ay) / vl >= cosMax) { it.goal = [gx, gy]; return; }
+    }
+    const L = DUCKS.minTrip * 0.6, gx = Math.max(B.x0, Math.min(B.x1, it.x + ax * L));
+    it.goal = [gx, Math.max(B.y0, Math.min(B.y1, this.zoneBottom(gx), it.y + ay * L))];
   }
 
   drive(it, t, dt, sim) {
@@ -332,7 +441,7 @@ export class Ducks {
     const z = Z.duck + it.y * 0.004;
     const kp = (CAMERA.D - z) / CAMERA.D;
     it.root.position.set((it.x - this.centre[0]) * kp, -(it.y - this.centre[1]) * kp, z);
-    it.root.scale.setScalar(this.scale * kp * this.persp.S(it.x, it.y)); // phối cảnh: cao hơn / ra hai bên thì to hơn
+    it.root.scale.setScalar(this.scale * kp * this.persp.S(it.x, it.y) * it.pop); // phối cảnh: cao hơn / ra hai bên thì to hơn; pop: vào/ra ao
     it.root.rotation.z = -this.persp.lean(it.x, it.y) * PERSPECTIVE.lean; // ngả theo tia về điểm tụ, như vòng sóng quanh nó
     it.mat.uniforms.uKp.value = kp; // shader cần để quy toạ độ thế giới về toạ độ ảnh
   }
@@ -345,7 +454,7 @@ export class Ducks {
   /* -------------------------------------------------------------- con trỏ */
   // Hình bầu dục tiếp nước, để lá không trôi xuyên qua vịt.
   bodies() {
-    return this.items.map((it) => {
+    return this.items.filter((it) => it.leaveT < 0).map((it) => {
       const ps = this.persp.S(it.x, it.y), a = this.contact[0] * ps, b = this.contact[1] * ps;
       const ch = Math.abs(Math.cos(it.head)), sh = Math.abs(Math.sin(it.head));
       return { cx: it.x, cy: it.y, rx: a * ch + b * sh, ry: (a * sh + b * ch) * this.squash };
@@ -361,6 +470,7 @@ export class Ducks {
     const [a, b] = this.contact;
     for (let k = this.items.length - 1; k >= 0; k--) {
       const it = this.items[k], ps = this.persp.S(it.x, it.y);
+      if (it.leaveT >= 0) continue; // đang lặn đi: không bấm được
       const dx = ix - it.x, dy = iy - it.y;
       const ch = Math.abs(Math.cos(it.head)), sh = Math.abs(Math.sin(it.head));
       const halfW = (a * ch + b * sh) * 1.15 * ps, ry = (a * sh + b * ch) * this.squash * ps;
@@ -370,8 +480,11 @@ export class Ducks {
     return -1;
   }
 
+  // k: chỉ số hoặc chính con vịt (input.js giữ con vịt — thêm/bớt vịt làm xê dịch chỉ số)
+  item(k) { return typeof k === 'number' ? this.items[k] : k; }
+
   grab(k, ix, iy) {
-    const it = this.items[k];
+    const it = this.item(k);
     it.held = true;
     it.goal = null;
     it.rest = 0;
@@ -381,13 +494,13 @@ export class Ducks {
   }
 
   moveHeld(k, ix, iy) {
-    const it = this.items[k], B = this.bounds;
+    const it = this.item(k), B = this.bounds;
     it.tx = Math.max(B.x0, Math.min(B.x1, ix + it.grabX));
     it.ty = Math.max(B.y0, Math.min(B.y1, this.zoneBottom(it.tx), iy + it.grabY));
   }
 
   release(k) {
-    const it = this.items[k];
+    const it = this.item(k);
     it.held = false;
     it.rest = rand(0.3, 1.2);
     if (Math.random() < DUCKS.shake.afterDrag) it.shakeAfter = rand(0.4, 0.9); // bị cầm xong thì rũ mình

@@ -102,6 +102,10 @@ export const BUBBLES = {
   z: [120, 40], // độ cao lúc sinh → lúc nổ (thị sai: gần thì trượt nhiều theo camera)
   alpha: 0.92,
   pop: { apex: [901, 707], slope: 0.727 }, // viền tam giác: y_nổ(x) = apex.y − |x − apex.x|·slope
+  // Nhoè theo độ xa gần (bubbles.js → bubbleMaterial): px màn hình — near lúc vừa sinh (gần, ngoài nét), nét nhất ở
+  // `focus` (phần quãng nổi), far sát chỗ vỡ (lớp nước dày), không dưới min. expand: nới ô vẽ cho vệt nhoè khỏi bị cắt
+  // ở mép; maxUv: trần bán kính nhoè theo khổ ảnh (bóng bấm nước trên điện thoại rất nhỏ). Tia nổ và sao không nhoè.
+  blur: { near: 5.6, focus: 0.6, far: 2, min: 0.5, expand: 1.3, maxUv: 0.12 }, // near 4 → 5,6 (+40 %, chủ dự án 2026-10-07)
   spark: { url: 'images-bg/spark.svg', dur: 0.55, size: 2.0 }, // tia nổ: to bằng bán kính bóng × size, kéo dài dur giây
   // Bấm mặt nước: count bóng nhỏ bán kính r sinh dưới chỗ bấm below px, nổi travel px với tốc độ rise rồi vỡ; z lúc
   // sinh → lúc vỡ (gần người xem rồi lùi về phía mặt nước); max bóng cùng lúc; ripple: gợn khi vỡ (biên độ sim).
@@ -178,6 +182,9 @@ export const RAYS = { amp: 0.05, perp: [0.91, 0.42], waves: [[140, 9], [310, -6]
 export const FLOW = { dir: 1, speed: 15, jitter: 3.5, meander: 5 };
 
 export const LEAVES = {
+  // TẮT 2026-10-07: chủ dự án thấy lá sen "không ổn lắm", bỏ hết khỏi ao. false = không nạp model lá, ao chạy với
+  // danh sách lá rỗng (leaves.js vẫn chạy, 0 lá). Model + code giữ nguyên; bật lại là true.
+  enabled: false,
   areaPerLeaf: 330000, // số lá = diện tích khung nhìn (px ảnh²) / con số này
   minCount: 4,
   maxCount: 9,
@@ -198,7 +205,18 @@ export const LEAVES = {
 
 // Hai chú vịt (model 3D, xem DUCK_MODEL bên dưới).
 export const DUCKS = {
-  count: 2,
+  count: 2, // số vịt lúc mở trang; nút + / − (ui.js) đổi trong khoảng 1..max
+  // Tối đa (2026-10-07, chủ dự án chọn): máy tính 6, điện thoại 4 — mỗi con là model ~94k tam giác, và màn dọc chỉ
+  // thấy dải giữa hẹp nên đông hơn là chật.
+  max: { desktop: 6, mobile: 4 },
+  separation: 1.05, // khoảng cách đẩy nhau = (dài + rộng elip tiếp nước) × số này (cũ 1,5; −30 % theo chủ dự án)
+  enter: { dur: 0.7, from: 0.55 }, // vịt mới rơi xuống nước: cỡ bật từ `from` lên quá 1 rồi về 1 trong `dur` giây
+  leave: { dur: 0.5 }, // vịt bị bớt: co lại lặn xuống trong `dur` giây rồi gỡ khỏi cảnh
+  // Vịt chạm nhau thì đổi hướng (2026-10-07, chủ dự án: "khi vịt chạm nhau nó sẽ chuyển hướng khác để đi"): CHỈ khi
+  // chạm — cả hai nảy lùi nhẹ `bounce` px/s, chọn đích mới về phía ngược con kia lệch ±`spread`°, gợn `ripple` ở chỗ
+  // chạm; `cooldown` giây hồi. Đã thử né trước (lái tránh khi con khác ở phía trước) — bị chê "gần đến nhau chuyển
+  // hướng rất giật lag" (lực né tính lại mỗi khung kéo hướng qua lại), đã bỏ.
+  bump: { bounce: 25, spread: 45, ripple: 1.2, cooldown: 1.2 },
   scale: 0.6,
   speed: 42, // tốc độ bơi (px ảnh / giây)
   turnRate: 1.25, // tốc độ xoay hướng (rad/s) — chậm lại thì khung đổi thưa, đỡ giật

@@ -10,6 +10,48 @@ import { spriteMaterial, setSpriteColor } from './assets.js';
 const rand = (a, b) => a + Math.random() * (b - a);
 const TAU = Math.PI * 2;
 
+// Bong bóng NHOÈ THEO ĐỘ XA GẦN (2026-10-07, chủ dự án: "tăng gaussian blur cho bubble"), như máy ảnh dưới nước:
+// vừa sinh ở GẦN thì ngoài nét (BUBBLES.blur.near px màn hình), nổi tới `focus` (phần quãng nổi) thì nét nhất, sát mặt
+// nước lại nhoè (`far`) vì lớp nước dày. Làm mờ ngay trong shader: 16 mẫu xoắn ốc (góc vàng) quanh điểm, bán kính =
+// độ nhoè / đường kính bóng trên màn hình. Ô vẽ nới `expand` lần để vệt nhoè không bị cắt vuông ở mép; ngoài khổ ảnh
+// thì 0. Texture nhân sẵn alpha như spriteMaterial, hoà One / OneMinusSrcAlpha. Tia nổ và sao vẫn dùng spriteMaterial (sắc).
+function bubbleMaterial(map) {
+  return new THREE.ShaderMaterial({
+    uniforms: { map: { value: map }, uBlur: { value: 0 }, uExpand: { value: BUBBLES.blur.expand }, uAlpha: { value: 0 } },
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: /* glsl */ `
+      uniform sampler2D map;
+      uniform float uBlur, uExpand, uAlpha;
+      varying vec2 vUv;
+      void main(){
+        vec2 uv = (vUv - 0.5) * uExpand + 0.5;
+        vec4 s = vec4(0.0);
+        for (int i = 0; i < 16; i++) {
+          float fi = float(i);
+          vec2 q = uv + uBlur * sqrt((fi + 0.5) / 16.0) * vec2(cos(fi * 2.39996), sin(fi * 2.39996));
+          float inside = step(0.0, q.x) * step(q.x, 1.0) * step(0.0, q.y) * step(q.y, 1.0);
+          s += texture2D(map, q) * inside;
+        }
+        gl_FragColor = s / 16.0 * uAlpha;
+        #include <colorspace_fragment>
+      }`,
+    transparent: true, depthTest: false, depthWrite: false,
+    blending: THREE.CustomBlending,
+    blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+    blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+  });
+}
+
+// Độ nhoè (px màn hình) theo tiến độ nổi k: 0 = vừa sinh (gần), 1 = chạm chỗ vỡ (xa, sát mặt nước).
+function blurAt(k) {
+  const B = BUBBLES.blur;
+  const near = B.near * Math.pow(Math.max(0, 1 - k / B.focus), 1.5);
+  const far = B.far * Math.min(1, Math.max(0, (k - B.focus) / (1 - B.focus))) ** 2;
+  return Math.max(B.min, near + far);
+}
+
 export class Bubbles {
   constructor({ textures, spark, scene, place, view, reduceMotion, onPop, scale = 1 }) {
     this.k = scale; // objScale: bóng nhỏ lại trên điện thoại dọc
@@ -18,16 +60,16 @@ export class Bubbles {
     this.V = view;
     this.reduceMotion = reduceMotion;
     this.geo = new THREE.PlaneGeometry(1, 1);
-    const sprite = (tex, order) => {
-      const m = new THREE.Mesh(this.geo, spriteMaterial(tex));
+    const sprite = (tex, order, blur = false) => {
+      const m = new THREE.Mesh(this.geo, blur ? bubbleMaterial(tex) : spriteMaterial(tex));
       m.renderOrder = order; // trên vịt và lá (bóng ở giữa người xem và mặt nước), dưới giọt nước
       m.frustumCulled = false;
       m.visible = false;
       scene.add(m);
       return m;
     };
-    this.items = Array.from({ length: BUBBLES.max }, (_, i) => ({ m: sprite(textures[i % textures.length], 18000), live: false }));
-    this.taps = Array.from({ length: BUBBLES.tap.max }, (_, i) => ({ m: sprite(textures[i % textures.length], 18000), live: false, tap: true }));
+    this.items = Array.from({ length: BUBBLES.max }, (_, i) => ({ m: sprite(textures[i % textures.length], 18000, true), live: false }));
+    this.taps = Array.from({ length: BUBBLES.tap.max }, (_, i) => ({ m: sprite(textures[i % textures.length], 18000, true), live: false, tap: true }));
     this.sparks = Array.from({ length: BUBBLES.max + BUBBLES.tap.max }, () => ({ m: sprite(spark, 18500), live: false }));
     this.next = rand(0.2, 1);
   }
@@ -119,9 +161,13 @@ export class Bubbles {
       b.z = b.z0 + (b.z1 - b.z0) * k;
       if (b.y <= yPop || b.y < this.V.y - 120) { this.pop(b); continue; }
       b.m.visible = true;
-      const d = b.r * 2;
-      this.place(b.m, b.x, b.y, b.z, b.rot + b.spin * b.age, d, d);
-      setSpriteColor(b.m.material, Math.min(1, b.age / (b.tap ? 0.12 : 0.5)) * BUBBLES.alpha);
+      const d = b.r * 2, E = BUBBLES.blur.expand;
+      this.place(b.m, b.x, b.y, b.z, b.rot + b.spin * b.age, d * E, d * E); // ô vẽ nới ra cho vệt nhoè
+      // đường kính bóng trên màn hình (px CSS) = px ảnh × độ phóng khung nhìn (place() đã bù thị sai theo z)
+      const dScreen = d * this.V.s;
+      const u = b.m.material.uniforms;
+      u.uBlur.value = Math.min(BUBBLES.blur.maxUv, blurAt(k) / Math.max(dScreen, 1));
+      u.uAlpha.value = Math.min(1, b.age / (b.tap ? 0.12 : 0.5)) * BUBBLES.alpha;
     }
     const D = BUBBLES.spark.dur;
     for (const s of this.sparks) {
