@@ -13,10 +13,10 @@ function fallback(reason) {
 async function boot() {
   if (params.has('static') || params.has('nogl')) return fallback('');
   try {
-    const [{ Pond }, { PondInput }, { createDuckControls }] = await Promise.all([
+    const [{ Pond }, { PondInput }, { createShell }] = await Promise.all([
       import('./pond/scene.js'),
       import('./pond/input.js'),
-      import('./pond/ui.js'),
+      import('./pond/shell.js'),
     ]);
     // Bản dịu chỉ bật bằng cờ ?calm, KHÔNG theo prefers-reduced-motion: Windows tắt "Animation effects" là Chrome
     // báo reduce, ao mất sóng sau đuôi vịt, vẫy đuôi, rũ nước… — chủ dự án thấy máy mình khác máy người khác.
@@ -27,7 +27,7 @@ async function boot() {
       debug: params.has('debug'),
     });
     new PondInput(pond, pondEl);
-    createDuckControls(pond); // nút + / − số vịt
+    createShell(pond); // lớp giao diện: tiêu đề, cột nút công cụ, Customize, bộ đếm vịt (thay hai nút + / − của ui.js)
     if (params.has('debug') || params.has('test')) window.__pond = pond;
   } catch (err) {
     fallback(err);
