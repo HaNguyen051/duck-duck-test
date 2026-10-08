@@ -4,10 +4,11 @@
 // Bấm vào mặt nước thì thêm vài bóng nhỏ (BUBBLES.tap) sinh ngay dưới chỗ bấm, nổi một quãng ngắn rồi vỡ và
 // gợn nhẹ mặt nước — pool riêng `taps` để bấm dồn dập không giành chỗ của bóng nổi từ đáy.
 import * as THREE from 'three';
-import { BUBBLES } from './config.js';
+import { BUBBLES, NIGHT } from './config.js';
 import { spriteMaterial, setSpriteColor } from './assets.js';
 
 const rand = (a, b) => a + Math.random() * (b - a);
+const ONE = new THREE.Vector3(1, 1, 1);
 const TAU = Math.PI * 2;
 
 // Bong bóng NHOÈ THEO ĐỘ XA GẦN (2026-10-07, chủ dự án: "tăng gaussian blur cho bubble"), như máy ảnh dưới nước:
@@ -17,13 +18,14 @@ const TAU = Math.PI * 2;
 // thì 0. Texture nhân sẵn alpha như spriteMaterial, hoà One / OneMinusSrcAlpha. Tia nổ và sao vẫn dùng spriteMaterial (sắc).
 function bubbleMaterial(map) {
   return new THREE.ShaderMaterial({
-    uniforms: { map: { value: map }, uBlur: { value: 0 }, uExpand: { value: BUBBLES.blur.expand }, uAlpha: { value: 0 } },
+    uniforms: { map: { value: map }, uBlur: { value: 0 }, uExpand: { value: BUBBLES.blur.expand }, uAlpha: { value: 0 }, uTint: { value: new THREE.Vector3(1, 1, 1) } },
     vertexShader: /* glsl */ `
       varying vec2 vUv;
       void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: /* glsl */ `
       uniform sampler2D map;
       uniform float uBlur, uExpand, uAlpha;
+      uniform vec3 uTint; // đêm: ánh trăng (NIGHT.bubble), ngày: 1
       varying vec2 vUv;
       void main(){
         vec2 uv = (vUv - 0.5) * uExpand + 0.5;
@@ -34,7 +36,7 @@ function bubbleMaterial(map) {
           float inside = step(0.0, q.x) * step(q.x, 1.0) * step(0.0, q.y) * step(q.y, 1.0);
           s += texture2D(map, q) * inside;
         }
-        gl_FragColor = s / 16.0 * uAlpha;
+        gl_FragColor = vec4(s.rgb * uTint, s.a) / 16.0 * uAlpha;
         #include <colorspace_fragment>
       }`,
     transparent: true, depthTest: false, depthWrite: false,
@@ -72,6 +74,7 @@ export class Bubbles {
     this.taps = Array.from({ length: BUBBLES.tap.max }, (_, i) => ({ m: sprite(textures[i % textures.length], 18000, true), live: false, tap: true }));
     this.sparks = Array.from({ length: BUBBLES.max + BUBBLES.tap.max }, () => ({ m: sprite(spark, 18500), live: false }));
     this.next = rand(0.2, 1);
+    this.night = 0; // 0 = ngày … 1 = đêm, scene.js đặt mỗi khung: bóng ngả màu ánh trăng (tia nổ và sao giữ nguyên)
   }
 
   // Mép tam giác tại hoành độ x: bóng nổi tới đây thì nổ.
@@ -168,6 +171,7 @@ export class Bubbles {
       const u = b.m.material.uniforms;
       u.uBlur.value = Math.min(BUBBLES.blur.maxUv, blurAt(k) / Math.max(dScreen, 1));
       u.uAlpha.value = Math.min(1, b.age / (b.tap ? 0.12 : 0.5)) * BUBBLES.alpha;
+      u.uTint.value.set(...NIGHT.bubble).lerp(ONE, 1 - this.night);
     }
     const D = BUBBLES.spark.dur;
     for (const s of this.sparks) {

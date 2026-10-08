@@ -11,7 +11,7 @@
 // phần dưới là nước sâu, đứng yên, chỉ có tia nắng lung linh. Trong elip mặt nước còn phủ LƯỚI SÓNG TRẮNG
 // (WATER-EFFECT 2.svg) lấy mẫu trên mặt phẳng nước nên ô lưới co theo phối cảnh và méo theo gợn sóng.
 import * as THREE from 'three';
-import { SUN, AMBIENT_WAVES, AMBIENT_GAIN, SURFACE, NET, RAYS, DEEP_FLOW, FOLIAGE } from './config.js';
+import { SUN, AMBIENT_WAVES, AMBIENT_GAIN, SURFACE, NET, RAYS, DEEP_FLOW, FOLIAGE, NIGHT } from './config.js';
 
 // Phép chiếu ảnh ↔ mặt phẳng nước (xem persp.js) và sóng nền, dùng chung cho shader nước và vật nổi.
 // waves(img, t): sóng phẳng trên MẶT PHẲNG NƯỚC tại điểm ảnh img → (chiều cao, đạo hàm theo px ảnh x,
@@ -96,6 +96,8 @@ void main(){
 
 const FRAG = /* glsl */ `
 uniform sampler2D uBg;     // nền đã nướng (tranh + các lớp nước), phủ uBgRect (toạ độ ảnh); ngoài khổ kéo dài mép
+uniform sampler2D uBgNight; // nền đêm, cùng khung (chưa nạp thì = uBg)
+uniform float uNight;       // 0 = ngày, 1 = đêm; giữa = đang chuyển (scene.js)
 uniform sampler2D uHeight; // lưới sóng mô phỏng
 uniform sampler2D uZone;   // mặt nạ vùng mặt nước (kênh r), phủ uZoneRect
 uniform vec4 uArea, uBgRect, uZoneRect;
@@ -129,6 +131,8 @@ float flowNoise(vec2 p){
   return mix(mix(flowHash(i), flowHash(i + vec2(1.0, 0.0)), u.x), mix(flowHash(i + vec2(0.0, 1.0)), flowHash(i + vec2(1.0, 1.0)), u.x), u.y);
 }
 float flowFbm(vec2 p){ return 0.65 * flowNoise(p) + 0.35 * flowNoise(p * 2.03 + 17.1); }
+// Nền tại uv: ngày hoà sang đêm theo uNight (lấy mẫu cả hai vô điều kiện — không lấy mẫu trong nhánh rẽ).
+vec3 bgAt(vec2 uv){ return mix(texture2D(uBg, uv).rgb, texture2D(uBgNight, uv).rgb, uNight); }
 varying vec2 vImg;
 ${WAVES_GLSL}
 ${NET_GLSL}
@@ -233,18 +237,18 @@ void main(){
   // bác vệt sáng/dải tối dọc mép: "vẽ cái đường đấy thì không còn chân thật"). Lấy mẫu vô điều kiện.
   vec2 bo = vec2(1.0, -1.0) * uDeepBlur * deep / uBgRect.zw;
   vec2 bu = vec2(buv.x, 1.0 - buv.y);
-  vec3 c = texture2D(uBg, bu).rgb * 4.0
-    + (texture2D(uBg, bu + vec2(bo.x, 0.0)).rgb + texture2D(uBg, bu - vec2(bo.x, 0.0)).rgb
-     + texture2D(uBg, bu + vec2(0.0, bo.y)).rgb + texture2D(uBg, bu - vec2(0.0, bo.y)).rgb) * 2.0
-    + texture2D(uBg, bu + bo).rgb + texture2D(uBg, bu - bo).rgb
-    + texture2D(uBg, bu + vec2(bo.x, -bo.y)).rgb + texture2D(uBg, bu - vec2(bo.x, -bo.y)).rgb;
+  vec3 c = bgAt(bu) * 4.0
+    + (bgAt(bu + vec2(bo.x, 0.0)) + bgAt(bu - vec2(bo.x, 0.0))
+     + bgAt(bu + vec2(0.0, bo.y)) + bgAt(bu - vec2(0.0, bo.y))) * 2.0
+    + bgAt(bu + bo) + bgAt(bu - bo)
+    + bgAt(bu + vec2(bo.x, -bo.y)) + bgAt(bu - vec2(bo.x, -bo.y));
   c /= 16.0;
   float sunNear = exp(-length(vImg - uSun) / 1500.0);
   // 1d) L4 lá viền TRONG SUỐT 0,85 → 1: lá mỏng li ti đón nắng hoà một phần với màu trời ngay phía sau (mẫu nền lệch
   // 45 px về phía tâm trời), mạnh lên khi mặt nước chỗ đó tụ sáng (caustics, cùng công thức bước 2) và theo nhịp 3 s.
   // (Ánh sáng le lói cũ trên cả tán đã bỏ — bản mô tả mới chỉ đổi sáng ở lớp này.)
   vec2 su = (p - fdir * 45.0 - uBgRect.xy) / uBgRect.zw;
-  vec3 skyC = texture2D(uBg, vec2(su.x, 1.0 - su.y)).rgb;
+  vec3 skyC = bgAt(vec2(su.x, 1.0 - su.y));
   float focusPre = clamp(-lap * uFocus * (0.55 + uSunGain * sunNear), -0.55, 1.5);
   float trans = clamp(0.5 + 0.3 * sin(tL.w * uFolL4.z + 0.4) + 1.2 * max(focusPre, 0.0), 0.0, 1.0);
   c = mix(c, skyC, w4 * (1.0 - uFolL4.w) * trans);
@@ -308,12 +312,16 @@ export function netUniforms(net, reduceMotion) {
   };
 }
 
-// bg: { texture, rect } nền nướng sẵn; net: { texture, aspect } lưới sóng trắng (null = không có);
+const FOCUS_TINT = 0.42; // độ ngả trắng xanh ở chỗ chói nhất (ban ngày; đêm nhân NIGHT.focusTint)
+
+// bg: { texture, rect, foliage, night? } nền nướng sẵn (night: texture nền đêm nếu đã nạp); net: { texture, aspect } lưới sóng trắng (null = không có);
 // zone: { texture, rect } mặt nạ vùng mặt nước; area: vùng mặt nước vẽ (toạ độ ảnh, = world).
 export function createWater({ bg, net, zone, area, sim, reduceMotion }) {
   const uniforms = {
     ...netUniforms(net, reduceMotion),
     uBg: { value: bg.texture },
+    uBgNight: { value: bg.night || bg.texture },
+    uNight: { value: 0 },
     uFoliage: { value: bg.foliage ? bg.foliage.texture : blackTex() },
     uFoliageA: { value: new THREE.Vector4(bg.foliage ? FOLIAGE.cap * (reduceMotion ? 0.5 : 1) : 0, FOLIAGE.wind, FOLIAGE.gust.amt, 1 / FOLIAGE.gust.every) },
     uFolL1: { value: new THREE.Vector4(rad(FOLIAGE.fore.deg), FOLIAGE.fore.shift[0], FOLIAGE.fore.shift[1], TAU / FOLIAGE.fore.period) },
@@ -346,7 +354,7 @@ export function createWater({ bg, net, zone, area, sim, reduceMotion }) {
     uGain: { value: 1 },
     uRefr: { value: 54 },      // độ lệch khúc xạ của nền
     uFocus: { value: 8.5 },    // độ mạnh của vệt tụ sáng
-    uFocusTint: { value: 0.42 }, // độ ngả trắng xanh ở chỗ chói nhất
+    uFocusTint: { value: FOCUS_TINT },
     uTIR: { value: 1.6 },      // ngưỡng phản xạ toàn phần
     uShade: { value: 0.025 },
     uSunGain: { value: 0.8 },
@@ -361,7 +369,12 @@ export function createWater({ bg, net, zone, area, sim, reduceMotion }) {
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(area.w, area.h), material);
   mesh.renderOrder = 0;
   mesh.frustumCulled = false;
-  const update = (t) => { uniforms.uTime.value = t; };
+  // night: 0 = ngày … 1 = đêm (đã làm mềm ở scene.js)
+  const update = (t, night = 0) => {
+    uniforms.uTime.value = t;
+    uniforms.uNight.value = night;
+    uniforms.uFocusTint.value = FOCUS_TINT * (1 + (NIGHT.focusTint - 1) * night);
+  };
   return { mesh, uniforms, update };
 }
 

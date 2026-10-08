@@ -29,6 +29,21 @@ export const PERSPECTIVE = { near: 1.25, far: 0.6, radial: true, lean: 0.6 };
 // Nền: tranh vòm cây + 9 lớp hoà trộn mặt nước đã nướng thành một ảnh (tools/bake-bg.py), phủ đúng khổ artboard.
 export const BG = { url: 'images-bg/bg.webp', rect: { x: 0, y: 0, w: 1920, h: 1080 } };
 
+// Đêm (2026-10-08, nút ngày/đêm trong hàng công cụ — shell.js → pond.setNight). Nền đêm nướng bằng
+// `tools/bake-bg.py … --night ~/Downloads/NIGHT-BG.png` (tranh thô của chủ dự án: tán lá Y HỆT bản ngày, chỉ khác ánh
+// sáng — nên mặt nạ cây tách từ nền ngày dùng chung, cây vẫn lắc như ngày). Nạp ngầm sau khi ao đã chạy. fade: giây
+// chuyển ngày ↔ đêm. Vật nổi (vịt, lá) nhân `tint` (hệ số TUYẾN TÍNH, ánh trăng xanh lạnh) và phần nổi pha về `haze`
+// (trời đêm nhìn qua mặt nước) thay cho throughHaze ban ngày. focusTint: vệt chói của tụ sáng (cộng trắng xanh) còn
+// ngần này phần — giữ nguyên như ngày thì mặt nước loé trắng giữa đêm. bubble: bong bóng (sprite trắng) nhân màu này.
+export const NIGHT = {
+  url: 'images-bg/bg-night.webp',
+  fade: 1.6,
+  tint: [0.42, 0.5, 0.72],
+  haze: [0.12, 0.18, 0.34],
+  focusTint: 0.4,
+  bubble: [0.62, 0.72, 0.9],
+};
+
 // Vùng MẶT NƯỚC (toạ độ artboard):
 // - arc: mép dưới vùng nước loang — bên trên là mặt nước (sóng, vịt, lá, chạm được), bên dưới là nước sâu
 //   (bong bóng, tia nắng). Chữ V do chủ dự án khoanh trên ảnh chụp (2026-10-06, "loang full khu highlight"):

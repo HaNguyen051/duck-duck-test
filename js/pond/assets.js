@@ -2,7 +2,7 @@
 // bong bóng) rasterize thành texture, độ ép dẹt `squash` từ file AI cũ (images-duck-v2/manifest.json), model 3D
 // cho vịt và lá. prepareAssets chạy một lần lúc mở trang.
 import * as THREE from 'three';
-import { MANIFEST, BG, NET, BUBBLES, SPARKLES, FOLIAGE, LEAVES } from './config.js';
+import { MANIFEST, BG, NET, BUBBLES, SPARKLES, FOLIAGE, LEAVES, NIGHT } from './config.js';
 import { loadDuckModel } from './duck3d.js';
 import { loadLeafModels } from './leaf3d.js';
 
@@ -198,10 +198,16 @@ export async function prepareAssets() {
   });
   const [bg, net, bubbles, spark, model, leaves, foliage] = await Promise.all([bgP, netP, bubblesP, sparkP, modelP, leavesP, foliageP]);
 
+  // Nền đêm KHÔNG nạp cùng lúc (khỏi giành băng thông lúc mở trang): Pond.loadNight gọi khi ao đã chạy. Hỏng thì null —
+  // nút đêm không làm gì. Mặt nạ cây dùng chung với nền ngày (tán lá trùng khớp).
+  let nightP = null;
+  const loadNight = () => (nightP ||= loadImageURL(NIGHT.url).then(imageTexture).catch(warn('nền đêm')));
+
   return {
     bg: { texture: bg, rect: BG.rect, foliage },
     net, bubbles, spark,
     leaves,
     duck: { squash: man.duck.squash, model },
+    loadNight,
   };
 }

@@ -22,6 +22,7 @@ export class Leaves {
     this.squash = squash;
     this.ambGain = ambGain;
     this.reduceMotion = reduceMotion;
+    this.night = 0; // 0 = ngày … 1 = đêm, scene.js đặt mỗi khung (floater.js)
     this.s = { h: 0, gx: 0, gy: 0 };
     this.w = { h: 0, gx: 0, gy: 0 };
     const count = models.length ? Math.round(clamp((view.w * view.h) / LEAVES.areaPerLeaf, LEAVES.minCount, LEAVES.maxCount)) : 0;
@@ -290,6 +291,7 @@ export class Leaves {
       p.root.rotation.z = -this.persp.lean(p.x, p.y) * PERSPECTIVE.lean; // cuống ngả theo tia về điểm tụ
       p.mat.uniforms.uKp.value = kp;
       p.mat.uniforms.uTime.value = t;
+      p.mat.uniforms.uNight.value = this.night;
     }
   }
 }

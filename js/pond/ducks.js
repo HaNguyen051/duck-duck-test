@@ -33,6 +33,7 @@ export class Ducks {
     // scale: objScale của cảnh (điện thoại dọc < 1) — cỡ, vùng tiếp nước, biên bơi, tốc độ đều theo nó
     this.scale = DUCKS.scale * scale;
     this.speed = DUCKS.speed * scale; // vịt nhỏ thì bơi chậm theo, không vụt nhanh hơn thân mình
+    this.night = 0; // 0 = ngày … 1 = đêm, scene.js đặt mỗi khung (ánh trăng trên thân vịt — floater.js)
 
     // Mặt cắt thân ở mực nước (đo từ chính model): nửa trục dọc thân và ngang thân của elip tiếp nước.
     // Không có model (tải lỗi) thì ao không có vịt, mọi hàm bên dưới vẫn chạy với danh sách rỗng.
@@ -430,6 +431,7 @@ export class Ducks {
     // nhấp nhô: mực nước trong shader dịch ngược lại nên vịt chìm nông sâu theo sóng
     it.mat.uniforms.uWaterY.value = it.bob * DUCKS.bobGain;
     it.mat.uniforms.uTime.value = t;
+    it.mat.uniforms.uNight.value = this.night;
     it.mat.uniforms.uPaddle.value = it.paddle;
     it.mat.uniforms.uAnkle.value = DUCK_MODEL.ankleAmp * (it.paddle / DUCK_MODEL.paddle); // bàn chân gập theo mức quẫy
     // vẫy đuôi: dao động nhanh trong một bao hình sin để vào/ra êm

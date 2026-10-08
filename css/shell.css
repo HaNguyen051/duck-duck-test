@@ -1,6 +1,6 @@
 /* Interface layer over the pond (js/pond/shell.js). The pond stays full-bleed underneath; everything here floats.
-   Layout (from the owner's reference, 2026-10-07; rearranged 2026-10-08): fish picture top left, a row of round
-   tools top centre, Customize pill top right, title and subtitle bottom left, an upright + / − pill bottom right.
+   Layout (from the owner's reference, 2026-10-07; trimmed 2026-10-08 — no fish picture, no Customize): a column of
+   round tools top right, title and subtitle bottom left, an upright + / − pill bottom right.
    All controls share one look: flat, frosted grey, white type. */
 @font-face {
   font-family: 'Bootzy';
@@ -9,13 +9,9 @@
 }
 :root {
   --white: #fff;
-  --white-2: rgba(255, 255, 255, .78);
   --on-white: #17333c;                   /* type on a white (selected) control; not --ink, which style.css already uses */
   --frost: rgba(104, 122, 128, .52);     /* the grey of every button */
   --frost-strong: rgba(84, 102, 108, .7);
-  --frost-panel: rgba(58, 78, 86, .66);
-  --well: rgba(20, 40, 48, .3);          /* recessed track inside the panel */
-  --hairline: rgba(255, 255, 255, .2);
   --display: 'Bootzy', 'Arial Black', 'Helvetica Neue', Arial, sans-serif;
   --ui: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --pad: clamp(16px, 2vw, 30px);
@@ -23,7 +19,7 @@
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-l: env(safe-area-inset-left, 0px);
   --safe-r: env(safe-area-inset-right, 0px);
-  /* one size for the subtitle and the Customize label: 18px at 1440px wide, scales with the window */
+  /* one size for the subtitle and the "Show the interface" label: 18px at 1440px wide, scales with the window */
   --text: clamp(14px, 1.26vw, 20px);
   --blur: blur(14px) saturate(1.15);
 }
@@ -45,20 +41,7 @@
 .shell [hidden] { display: none !important; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-/* ---------- top bar: fish picture left, Customize right (the tool row sits between them, centred) ---------- */
-.bar {
-  position: absolute;
-  top: calc(var(--pad) + var(--safe-t));
-  left: calc(var(--pad) + var(--safe-l));
-  right: calc(var(--pad) + var(--safe-r));
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: start;
-  pointer-events: none;
-}
-.bar > * { pointer-events: auto; }
-.mark { justify-self: start; width: 40px; height: 40px; border-radius: 9px; object-fit: cover; pointer-events: none; }
-.bar [data-act="customize"] { grid-column: 3; justify-self: end; }
+/* ---------- pill button (only "Show the interface" uses it now) ---------- */
 .pill-btn {
   display: inline-flex;
   align-items: center;
@@ -78,15 +61,14 @@
 .shell .pill-btn { font-size: var(--text); } /* same size as the subtitle */
 .pill-btn:hover { background: var(--frost-strong); }
 .pill-btn:active { transform: scale(.97); }
-.shell .pill-btn[aria-expanded="true"] { background: var(--white); color: var(--on-white); }
 
-/* ---------- tools: a row of plain round buttons, top centre ---------- */
+/* ---------- tools: a column of plain round buttons, top right ---------- */
 .rail {
   position: absolute;
+  right: calc(var(--pad) + var(--safe-r));
   top: calc(var(--pad) + var(--safe-t));
-  left: 50%;
-  translate: -50% 0;
   display: flex;
+  flex-direction: column;
   gap: 16px;
 }
 .tool {
@@ -111,9 +93,9 @@
 .tool[data-tip]::after {
   content: attr(data-tip);
   position: absolute;
-  top: calc(100% + 10px); /* below the button: the row sits along the top edge */
-  left: 50%;
-  transform: translate(-50%, -4px);
+  right: calc(100% + 10px); /* left of the button: the column sits along the right edge */
+  top: 50%;
+  transform: translate(4px, -50%);
   padding: 5px 10px;
   border-radius: 8px;
   background: var(--frost-strong);
@@ -125,7 +107,7 @@
   transition: opacity .15s ease, transform .15s ease;
 }
 @media (hover: hover) {
-  .tool[data-tip]:hover::after, .tool[data-tip]:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
+  .tool[data-tip]:hover::after, .tool[data-tip]:focus-visible::after { opacity: 1; transform: translate(0, -50%); }
 }
 
 /* ---------- title and subtitle, bottom left ----------
@@ -154,65 +136,6 @@
   font: 400 var(--text)/1.22 var(--ui);
   text-shadow: 0 1px 12px rgba(2, 40, 52, .35);
 }
-
-/* ---------- Customize panel: drops from the Customize button, right-aligned under it ---------- */
-.panel {
-  position: absolute;
-  top: calc(var(--pad) + var(--safe-t) + 48px);
-  right: calc(var(--pad) + var(--safe-r));
-  width: min(380px, calc(100vw - 2 * var(--pad)));
-  max-height: calc(100% - 2 * var(--pad) - 60px - var(--safe-t) - var(--safe-b));
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  border-radius: 24px;
-  background: var(--frost-panel);
-  -webkit-backdrop-filter: blur(26px) saturate(1.2);
-  backdrop-filter: blur(26px) saturate(1.2);
-  box-shadow: 0 24px 60px rgba(2, 22, 32, .3);
-}
-.scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding: 22px 22px 16px;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, .3) transparent;
-}
-.panel:focus { outline: none; }
-.panel.in { animation: panel-in .32s cubic-bezier(.2, .8, .2, 1); }
-@keyframes panel-in { from { opacity: 0; transform: translateY(-8px) scale(.985); } }
-.panel .close { position: absolute; top: 16px; right: 16px; width: 32px; height: 32px; background: var(--well); }
-.panel h2 { margin: 0 40px 6px 0; font: 600 20px/1.3 var(--ui); letter-spacing: -.01em; }
-.body { margin: 0; font-size: 14px; color: var(--white-2); text-wrap: pretty; }
-
-.rows { margin-top: 14px; }
-.row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-  padding: 11px 0;
-  border-top: 1px solid var(--hairline);
-}
-.row-label { font-weight: 500; }
-.row.stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; } /* one full-width column: .row's space-between would otherwise shrink it to the textarea's default width */
-.row textarea {
-  width: 100%;
-  resize: none;
-  padding: 9px 12px;
-  border: 0;
-  border-radius: 12px;
-  background: var(--well);
-  font: 400 15px/1.35 var(--ui);
-  color: var(--white);
-}
-.row textarea::placeholder { color: var(--white-2); }
-.row input[type="range"] { flex: 1 1 150px; max-width: 180px; height: 24px; accent-color: var(--white); cursor: pointer; }
-.shell .text-btn { margin-top: 10px; padding: 6px 0; border: 0; background: none; font-size: 14px; text-decoration: underline; text-underline-offset: 3px; color: var(--white-2); }
-.shell .text-btn:hover { color: var(--white); }
 
 /* ---------- duck counter: an upright outlined pill, bottom right, + above − ---------- */
 .counter { display: inline-flex; align-items: center; border-radius: 999px; }
@@ -252,34 +175,22 @@ body.ui-hidden .shell > :not(.restore) { opacity: 0; visibility: hidden; pointer
 /* no scene (file://, no WebGL): nothing to control */
 body.nogl .shell { display: none; }
 
-/* ---------- phone: panel becomes a bottom sheet, title steps aside for it ---------- */
+/* ---------- phone ---------- */
 @media (max-width: 640px) {
-  /* the centred tool row would run into Customize on a narrow screen: it drops to a second row */
-  .rail { gap: 12px; top: calc(var(--pad) + var(--safe-t) + 48px); }
+  .rail { gap: 12px; }
   .tool[data-tip]::after { display: none; }
-  .shell > .counter { display: none; } /* no + / − on small screens: phones keep the starting number of ducks (Customize has no counter since 2026-10-08) */
+  .shell > .counter { display: none; } /* no + / − on small screens: phones keep the starting number of ducks */
   .hero-sub { max-width: none; }
   .hero h1 { font-size: clamp(40px, 13.5vw, 72px); } /* phones: sized to the narrow screen instead */
-  .panel {
-    top: auto;
-    left: 8px;
-    right: 8px;
-    bottom: calc(8px + var(--safe-b));
-    translate: none;
-    width: auto;
-    max-height: 62%;
-    background: rgba(58, 78, 86, .84);
-  }
-  @keyframes panel-in { from { opacity: 0; transform: translateY(10px); } }
-  body.panel-open .hero { opacity: 0; visibility: hidden; pointer-events: none; }
 }
 
-/* short landscape windows */
+/* short landscape windows: the column would run into the + / − pill, so it lies down as a row */
 @media (max-height: 520px) and (min-width: 641px) {
   .hero-sub { display: none; }
+  .rail { flex-direction: row; }
   .tool[data-tip]::after { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .shell, .shell > *, .panel.in { transition-duration: .01s; animation: none; }
+  .shell, .shell > * { transition-duration: .01s; }
 }

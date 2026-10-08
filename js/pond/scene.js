@@ -2,7 +2,7 @@
 // hồ lên (gói art 10/2026): mặt nước là vùng trên cung SURFACE.arc, dưới là nước sâu có bong bóng và sao.
 // Khung nhìn (toạ độ ảnh) phủ kín màn hình theo kiểu cover; đổi cỡ màn hình thì dựng lại cảnh.
 import * as THREE from 'three';
-import { CAMERA, SIM, Z, AMBIENT_GAIN, LAYOUT, PERSPECTIVE, SURFACE, computeView, surfacePath, surfaceBottom, surfaceInside, BUBBLES, DEEP_FLOW, MOBILE, isMobileDevice, DUCKS } from './config.js';
+import { CAMERA, SIM, Z, AMBIENT_GAIN, LAYOUT, PERSPECTIVE, SURFACE, computeView, surfacePath, surfaceBottom, surfaceInside, BUBBLES, DEEP_FLOW, MOBILE, isMobileDevice, DUCKS, NIGHT } from './config.js';
 import { Persp } from './persp.js';
 import { prepareAssets, dataTexture } from './assets.js';
 import { WaterSim, cellFor } from './watersim.js';
@@ -44,10 +44,15 @@ export class Pond {
     this.pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
     this.mobile = isMobileDevice(); // hồ sơ hiệu năng điện thoại (config MOBILE)
     this.builds = 0;
-    // số vịt người dùng chọn bằng nút + / − (ui.js): giữ qua các lần dựng lại cảnh; trần theo máy
+    // số vịt người dùng chọn bằng nút + / − (shell.js): giữ qua các lần dựng lại cảnh; trần theo máy
     this.maxDucks = this.mobile ? DUCKS.max.mobile : DUCKS.max.desktop;
     this.duckCount = Math.min(DUCKS.count, this.maxDucks);
-    this.onDuckCount = null; // ui.js gắn vào để làm mờ nút khi hết số
+    this.onDuckCount = null; // shell.js gắn vào để làm mờ nút khi hết số
+    // Ngày / đêm (shell.js → setNight): night chạy tuyến tính về nightTarget trong NIGHT.fade giây; texture nền đêm
+    // nạp ngầm sau khi ao đã chạy (loadNight). Giữ qua các lần dựng lại cảnh.
+    this.night = 0;
+    this.nightTarget = 0;
+    this.nightTex = null;
     this.perf = { frames: 0, time: 0 };
     this.place = this.place.bind(this);
 
@@ -56,6 +61,7 @@ export class Pond {
       clearTimeout(this.resizeTimer);
       this.resizeTimer = setTimeout(() => this.rebuildIfNeeded(), 180);
     }).observe(el);
+    setTimeout(() => this.loadNight(), 1500); // nạp sẵn nền đêm khi ao đã chạy, bấm đêm không phải chờ
     this.timer = new THREE.Timer();
     this.timer.connect(document);
     this.loop = (time) => this.frame(time);
@@ -97,7 +103,7 @@ export class Pond {
     sim.setShore(surfaceInside); // dải hút sóng mượt phía trong mép (đo vuông góc), không dội
 
     this.zone = this.makeZone(world);
-    this.water = createWater({ bg: this.assets.bg, net: this.assets.net, zone: this.zone, area: world, sim, reduceMotion: this.reduceMotion });
+    this.water = createWater({ bg: { ...this.assets.bg, night: this.nightTex }, net: this.assets.net, zone: this.zone, area: world, sim, reduceMotion: this.reduceMotion });
     this.water.mesh.position.set(world.x + world.w / 2 - this.CX, -(world.y + world.h / 2 - this.CY), 0);
     this.scene.add(this.water.mesh);
 
@@ -231,6 +237,27 @@ export class Pond {
 
   touch() { this.lastInput = this.t; }
 
+  // Nền đêm: nạp một lần, đẩy lên GPU trước (bấm đêm không khựng), gắn vào shader nước. Trả về texture hoặc null.
+  loadNight() {
+    return (this.nightP ||= this.assets.loadNight().then((tex) => {
+      if (!tex) return null;
+      this.renderer.initTexture(tex);
+      this.nightTex = tex;
+      this.water.uniforms.uBgNight.value = tex;
+      return tex;
+    }));
+  }
+
+  // Bật / tắt đêm (nút trong hàng công cụ). Nền đêm chưa nạp xong thì chờ rồi mới chuyển; nạp hỏng thì giữ ngày.
+  setNight(on) {
+    this.nightWant = !!on;
+    if (!on) { this.nightTarget = 0; return Promise.resolve(true); }
+    return this.loadNight().then((tex) => {
+      if (tex && this.nightWant) this.nightTarget = 1;
+      return !!tex;
+    });
+  }
+
   // Nút + : một con vịt rơi xuống chỗ trống — vòng sóng lớn, vài bong bóng, tiếng quạc. Trả về false nếu hết số.
   addDuck() {
     if (this.duckCount >= this.maxDucks || !this.assets.duck.model) return false;
@@ -328,6 +355,15 @@ export class Pond {
     this.t += dt;
     const t = this.t;
 
+    // ngày ↔ đêm: theo thời gian THẬT (cả khi ?freeze), làm mềm hai đầu bằng smoothstep
+    if (this.night !== this.nightTarget) {
+      const step = Math.min(raw, 0.1) / NIGHT.fade;
+      this.night = this.nightTarget > this.night ? Math.min(this.nightTarget, this.night + step) : Math.max(this.nightTarget, this.night - step);
+    }
+    const night = this.night * this.night * (3 - 2 * this.night);
+    this.ducks.night = this.leaves.night = night;
+    if (this.bubbles) this.bubbles.night = night;
+
     if (dt > 0) {
       this.leaves.stampCover(this.sim);
       this.acc += dt;
@@ -346,7 +382,7 @@ export class Pond {
     this.sortLayers();
     this.sim.upload();
     this.updateCamera(dt);
-    this.water.update(t);
+    this.water.update(t, night);
     this.renderer.render(this.scene, this.camera);
     if (this.debug) this.drawDebug();
 

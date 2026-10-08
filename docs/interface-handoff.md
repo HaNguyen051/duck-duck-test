@@ -1,5 +1,7 @@
 # Ao Vịt — tổng hợp lớp giao diện (bản chốt 2026-10-07)
 
+> **Đã đổi nhiều sau bàn giao (2026-10-08)** — bỏ nút Customize cùng cả bảng, bỏ ảnh cá, 5 nút công cụ về cột dọc góc trên phải, bộ đếm vịt xếp dọc không chữ, nút "Pop every bubble" thành ngày/đêm. Bản hiện hành: mục `shell.js` trong CLAUDE.md. Tài liệu này giữ làm tư liệu lúc bàn giao.
+
 Tài liệu này gom mọi thay đổi đã làm trên bản sao của repo `duck-duck-test` (gốc: commit `89cc995`), để đưa về repo thật.
 Bản chạy thử: artifact "Duck Pond" (cùng nội dung với các file dưới đây).
 
@@ -39,7 +41,7 @@ Không file nào khác của ao bị đụng: `scene.js`, `water.js`, `ducks.js`
 
 ## 4. Bố cục (theo ảnh tham chiếu của bạn)
 
-> **Cập nhật 2026-10-08:** bố cục đổi theo ảnh mẫu thứ hai — 5 nút công cụ thành hàng ngang giữa trên (tooltip bên dưới; ≤ 640 px xuống hàng hai), Customize sang góc trên phải (bảng thả xuống canh phải), bộ đếm thành viên dọc `+` trên `−` dưới, bỏ chữ "Duck". Bảng dưới là bản lúc bàn giao.
+> **Cập nhật 2026-10-08:** bố cục đổi theo ảnh mẫu thứ hai — 5 nút công cụ thành hàng ngang giữa trên (tooltip bên dưới; ≤ 640 px xuống hàng hai), Customize sang góc trên phải (bảng thả xuống canh phải), bộ đếm thành viên dọc `+` trên `−` dưới, bỏ chữ "Duck"; nút "Pop every bubble" thay bằng nút **ngày/đêm** (nền đêm `images-bg/bg-night.webp`, xem CLAUDE.md). Bảng dưới là bản lúc bàn giao.
 
 | Vị trí | Thành phần | Class |
 |---|---|---|

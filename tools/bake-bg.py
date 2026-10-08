@@ -11,6 +11,12 @@ Thứ tự và chế độ hoà trộn chép đúng từ bg-working file.psd (đ
 
 Dùng:  python3 tools/bake-bg.py "~/Downloads/duck background" images-bg/bg.webp [--size 2560x1440] [--check]
   --check: so với bản hợp nhất PSD (cần psd-tools) ở 1920×1080, in sai số trung bình.
+
+Bản ĐÊM (2026-10-08):  python3 tools/bake-bg.py "~/Downloads/duck background" images-bg/bg-night.webp --night ~/Downloads/NIGHT-BG.png
+  NIGHT-BG.png là tranh vòm cây THÔ (chưa có lớp nước), 1920×1080 đúng khung canvas PSD, tán lá trùng khớp bản ngày,
+  chỉ khác ánh sáng (trời sao, trăng). Nướng thẳng qua chồng lớp thì hai lớp luminosity + hue thay độ sáng bằng ảnh
+  nước BAN NGÀY → trời sáng bừng, mất sao. Đổi ánh sáng thuần (bản ngày đã nướng × tranh đêm / tranh ngày, từng điểm)
+  thì giữ đúng đêm nhưng trời mất vân nước. Nên lấy  (1 − m)·đổi ánh sáng + m·nướng thẳng,  m = --night-mix (0,3).
 """
 import argparse, os, sys, time
 import numpy as np
@@ -63,10 +69,13 @@ STACK = [
     (SHADE, '1-hardlight.png', 'hardlight'),
 ]
 
-def bake(src, W, H):
+def painting(src, W, H):
     paint = Image.open(os.path.join(src, 'download assets/bg/final-bg.png')).convert('RGB')
     box = ((-PAINT_OX) / PAINT_SCALE, (-PAINT_OY) / PAINT_SCALE, (1920 - PAINT_OX) / PAINT_SCALE, (1080 - PAINT_OY) / PAINT_SCALE)
-    base = np.asarray(paint.resize((W, H), Image.LANCZOS, box=box), dtype=np.float32) / 255
+    return np.asarray(paint.resize((W, H), Image.LANCZOS, box=box), dtype=np.float32) / 255
+
+def bake(src, W, H, base=None):
+    if base is None: base = painting(src, W, H)
     for folder, name, mode in STACK:
         layer = Image.open(os.path.join(src, folder, name)).convert('RGBA')
         if layer.size != (W, H): layer = layer.resize((W, H), Image.BILINEAR)
@@ -76,15 +85,24 @@ def bake(src, W, H):
         print(f'  {mode:11s} {name}')
     return np.clip(base, 0, 1)
 
+# Bản đêm: xem docstring đầu file. night_path: tranh đêm thô, khung canvas 1920×1080 (alpha bỏ qua).
+def bake_night(src, night_path, W, H, m):
+    day_raw = painting(src, W, H)
+    night_raw = np.asarray(Image.open(night_path).convert('RGB').resize((W, H), Image.LANCZOS), dtype=np.float32) / 255
+    relit = bake(src, W, H, day_raw.copy()) * night_raw / np.maximum(day_raw, 0.03)
+    return np.clip((1 - m) * relit + m * bake(src, W, H, night_raw), 0, 1)
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('src'); ap.add_argument('out')
     ap.add_argument('--size', default='2560x1440'); ap.add_argument('--quality', type=int, default=88)
     ap.add_argument('--check', action='store_true')
+    ap.add_argument('--night', help='tranh đêm thô (1920×1080, khung canvas PSD) → nướng bản đêm')
+    ap.add_argument('--night-mix', type=float, default=0.3)
     a = ap.parse_args()
     src = os.path.expanduser(a.src); W, H = map(int, a.size.lower().split('x'))
     t = time.time()
-    img = bake(src, W, H)
+    img = bake_night(src, os.path.expanduser(a.night), W, H, a.night_mix) if a.night else bake(src, W, H)
     out = Image.fromarray((img * 255 + 0.5).astype(np.uint8))
     os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
     out.save(a.out, quality=a.quality, method=6)

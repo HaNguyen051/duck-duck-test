@@ -86,7 +86,7 @@ Dự án web 3D dùng three.js: **ao tương tác nhìn từ DƯỚI đáy hồ 
 - **Bong bóng nổ ở viền tam giác, không phải ở cung mặt nước** ("bóng chạm đến viền tam giác thì nổ; hiệu ứng bể: dùng spark kết hợp"): đỉnh tam giác ở giữa‑dưới nên bóng giữa nổ sớm (thấp), bóng hai bên nổi gần tới mép trên mới nổ.
 - Vịt bơi gần như liên tục nên sóng sau đuôi là **nguồn sóng thường trực** — để mạnh tay là cả mặt ao đầy vòng sóng chồng chéo. Các số liên quan: `DUCKS.wakeGain/wakeEvery/wakeMinSpeed`, `SIM.damp`, `uFocus` trong `water.js`, và biên độ các bước sóng ngắn trong `AMBIENT_WAVES` (bước sóng càng ngắn thì độ cong càng lớn, mà sáng tối lại tính theo độ cong).
 
-Các skill `.claude/skills/threejs-*` viết theo three r160. Khi code mẫu trong skill khác với file này thì làm theo file này.
+Các skill `.Codex/skills/threejs-*` viết theo three r160. Khi code mẫu trong skill khác với file này thì làm theo file này.
 
 ## Phiên bản: three r186 (0.186.0)
 

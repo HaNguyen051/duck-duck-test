@@ -3,7 +3,7 @@
 // qua mặt nước nên xỉn màu và bị độ dốc mặt nước (sóng nền + gợn mô phỏng) bẻ lệch; phần chìm ở
 // cùng môi trường với người xem nên rõ nét. Vịt bật thêm DUCK_RIG để có chân, đầu, đuôi cử động.
 import * as THREE from 'three';
-import { SUN, AMBIENT_WAVES, AMBIENT_GAIN } from './config.js';
+import { SUN, AMBIENT_WAVES, AMBIENT_GAIN, NIGHT } from './config.js';
 import { WAVES_GLSL, NET_GLSL, netUniforms } from './water.js';
 import { FLAT_PERSP } from './persp.js';
 
@@ -107,6 +107,8 @@ uniform vec2 uNormalScale;
 uniform vec3 uL, uThroughTint, uTint, uBelowTint, uThroughHaze;
 uniform float uAmbient, uDiffuse, uEdge, uThroughDesat, uBelowDepth, uBelowDesat, uThroughHazeAmt, uTime, uNetGain;
 uniform vec3 uRimLine; // (độ rộng px, sáng của quầng mép nước, tối của dải ngay dưới mép)
+uniform float uNight;          // 0 = ngày, 1 = đêm (ducks.js / leaves.js đặt mỗi khung theo scene.js)
+uniform vec3 uNightTint, uNightHaze; // đêm: nhân màu (ánh trăng) và màu trời đêm nhìn qua mặt nước — NIGHT
 varying vec2 vUv;
 varying vec3 vN, vP;
 varying float vLocalY;
@@ -128,7 +130,8 @@ vec3 perturb(vec3 N, vec3 p, vec2 uv, vec3 mapN){
 }
 
 void main(){
-  vec3 base = texture2D(uMap, vUv).rgb * uTint;
+  vec3 base = texture2D(uMap, vUv).rgb * uTint * mix(vec3(1.0), uNightTint, uNight);
+  vec3 haze = mix(uThroughHaze, uNightHaze, uNight);
   vec3 n = normalize(vN);
   if (!gl_FrontFacing) n = -n;
   #ifdef HAS_NMAP
@@ -147,7 +150,7 @@ void main(){
   float through = smoothstep(-uEdge, uEdge, vLocalY);
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
   // rồi pha về màu sáng của bầu trời nhìn qua mặt nước (nền mới sáng: phần nổi nhạt đi chứ không tối đi)
-  vec3 veiled = mix(mix(col, vec3(lum), uThroughDesat) * uThroughTint, uThroughHaze, uThroughHazeAmt);
+  vec3 veiled = mix(mix(col, vec3(lum), uThroughDesat) * uThroughTint, haze, uThroughHazeAmt);
   col = mix(col, veiled, through);
   // Phần nổi nhìn xuyên qua mặt nước nên LƯỚI SÓNG TRẮNG của mặt nước phủ lên nó (như tranh mẫu); phần chìm
   // ở trước mặt nước thì không. uNetA.z = 0 khi không có lưới (trang soi).
@@ -165,7 +168,7 @@ void main(){
   float rw = max(uRimLine.x, 0.5);
   float rimUp = exp(-pow((vLocalY - rw * 0.6) / rw, 2.0));
   float rimDn = exp(-pow((vLocalY + rw * 1.6) / (rw * 1.4), 2.0));
-  col = mix(col, uThroughHaze, rimUp * uRimLine.y);
+  col = mix(col, haze, rimUp * uRimLine.y);
   col *= 1.0 - rimDn * uRimLine.z;
 
   gl_FragColor = vec4(col, 1.0);
@@ -205,6 +208,9 @@ export function floaterUniforms(model, look, ambGain = AMBIENT_GAIN) {
     uThroughDesat: { value: look.throughDesat },
     uThroughHaze: { value: new THREE.Vector3(...(look.throughHaze || [1, 1, 1])) },
     uThroughHazeAmt: { value: look.throughHazeAmt || 0 },
+    uNight: { value: 0 },
+    uNightTint: { value: new THREE.Vector3(...NIGHT.tint) },
+    uNightHaze: { value: new THREE.Vector3(...NIGHT.haze) },
     uNetGain: { value: look.netGain ?? 1 }, // lưới sóng trắng phủ lên phần nổi đậm bao nhiêu (lá: nhẹ hơn vịt)
     uRadial: { value: 0 }, // trang soi: không phối cảnh
     ...netUniforms(null, false), // trang soi: không có lưới sóng trắng; bindFloater nối lưới của cảnh
