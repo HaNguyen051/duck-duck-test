@@ -1,8 +1,8 @@
 // Interface layer over the pond (2026-10-07): title, tool rail, duck counter and the Customize panel. Everything here sits in a fixed overlay ABOVE #pond and never touches the scene's own code:
-// it only calls the public methods of Pond (addDuck, removeDuck, drop, bubbles.pop, audio, teardown/build).
+// it only calls the public methods of Pond (addDuck, removeDuck, drop, bubbles.pop, audio).
 //
 // The words on screen live in COPY just below — edit them there.
-import { DUCKS, AUDIO, AMBIENT_GAIN } from './config.js';
+import { AUDIO } from './config.js';
 
 /* ------------------------------------------------------------------ words */
 const COPY = {
@@ -14,12 +14,8 @@ const COPY = {
   hide: 'Hide the interface',
   show: 'Show the interface',
   customize: 'Customize',
-  duck: 'Duck', // label between the + and − buttons
   icon: 'icons/fish.png', // top-left picture
 };
-
-const SPEEDS = [['Lazy', 0.55], ['Easy', 1], ['Zippy', 1.9]];
-const LIGHTS = [['Noon', 'noon'], ['Golden hour', 'gold'], ['Dusk', 'dusk']];
 
 /* ------------------------------------------------------------------ icons */
 const svg = (d, extra = '') => `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}${extra}</svg>`;
@@ -66,7 +62,6 @@ export function createShell(pond) {
 
     <div class="counter" role="group" aria-label="Number of ducks">
       <button type="button" class="step" data-act="add-duck" aria-label="Add a duck">${ICON.plus}</button>
-      <span class="count-label" aria-hidden="true">${esc(COPY.duck)}</span>
       <output class="count sr" aria-live="polite"></output>
       <button type="button" class="step" data-act="remove-duck" aria-label="Remove a duck">${ICON.minus}</button>
     </div>
@@ -74,17 +69,11 @@ export function createShell(pond) {
     <button type="button" class="pill-btn restore" data-act="show">${ICON.show}<span>${esc(COPY.show)}</span></button>`;
   document.body.appendChild(root);
 
-  // Light tint lives INSIDE #pond, above the canvas, so the interface itself is never tinted.
-  const tint = document.createElement('div');
-  tint.className = 'pond-tint';
-  tint.setAttribute('aria-hidden', 'true');
-  pond.el.appendChild(tint);
-
   const $ = (sel) => root.querySelector(sel);
   const $$ = (sel) => [...root.querySelectorAll(sel)];
   const panel = $('#panel');
-  const baseSpeed = DUCKS.speed, baseMusic = AUDIO.music;
-  const state = { open: false, speed: 1, calm: !!pond.reduceMotion, light: 'noon', music: 1, sfx: true, muted: false };
+  const baseMusic = AUDIO.music;
+  const state = { open: false, music: 1, muted: false };
 
   /* -------- editable title --------
      The title is so large that it lies across the pond, so it takes no clicks itself (ducks under it stay
@@ -123,29 +112,12 @@ export function createShell(pond) {
     live.forEach((q, i) => setTimeout(() => { if (q.live) { b.pop(q, 1.35); pond.audio?.pop(); } }, i * 90));
     pond.touch();
   };
-  const setSpeed = (m) => {
-    state.speed = m;
-    DUCKS.speed = baseSpeed * m; // survives a rebuild (resize)
-    if (pond.ducks) pond.ducks.speed = DUCKS.speed * pond.objScale;
-  };
-  const setCalm = (on) => {
-    if (state.calm === on) return;
-    state.calm = on;
-    pond.reduceMotion = on;
-    pond.ambGain = (on ? 0.35 : 1) * AMBIENT_GAIN;
-    pond.teardown();
-    pond.build();
-    pond.acc = 0;
-    setSpeed(state.speed);
-  };
-  const setLight = (l) => { state.light = l; document.body.dataset.light = l; };
   const applyAudio = () => {
     const a = pond.audio;
     if (!a?.ctx) return;
     const t = a.ctx.currentTime;
     AUDIO.music = baseMusic * state.music; // startMusic() fades in to this if music has not begun yet
     a.master.gain.setTargetAtTime(state.muted ? 0 : AUDIO.master, t, 0.08);
-    a.sfx.gain.setTargetAtTime(state.sfx ? AUDIO.sfx : 0, t, 0.05);
     if (a.musicSrc) {
       a.music.gain.cancelScheduledValues(t);
       a.music.gain.setTargetAtTime(AUDIO.music, t, 0.15);
@@ -166,9 +138,9 @@ export function createShell(pond) {
     (h ? $('.restore') : $('.rail [data-act="hide"]')).focus({ preventScroll: true });
   };
 
-  /* -------- duck counter (also mirrored inside Customize) -------- */
+  /* -------- duck counter (bottom right only) -------- */
   const syncCount = (n = pond.duckCount, max = pond.maxDucks) => {
-    $$('.count').forEach((o) => { o.textContent = o.classList.contains('sr') ? (n === 1 ? '1 duck' : `${n} ducks`) : n; });
+    $$('.count').forEach((o) => { o.textContent = n === 1 ? '1 duck' : `${n} ducks`; });
     $$('[data-act="remove-duck"]').forEach((b) => { b.disabled = n <= 1; });
     $$('[data-act="add-duck"]').forEach((b) => { b.disabled = n >= max; });
   };
@@ -176,11 +148,9 @@ export function createShell(pond) {
 
   /* -------- panel -------- */
   const closeBtn = `<button type="button" class="tool small close" data-act="close" aria-label="Close panel">${ICON.close}</button>`;
-  const seg = (name, items, current) => `
-    <div class="seg" role="radiogroup" aria-label="${name}">
-      ${items.map(([label, val]) => `<button type="button" role="radio" data-set="${name}" data-val="${val}" aria-checked="${String(val) === String(current)}">${esc(label)}</button>`).join('')}
-    </div>`;
 
+  // Ducks (a second + / − counter), Swimming pace, Water (Lively/Calm), Light (Noon/Golden hour/Dusk) and the
+  // quacks/pops on-off switch were removed 2026-10-08 at the owner's request; their code is in git history (b19802e).
   const customHtml = () => `${closeBtn}
     <div class="scroll">
     <h2>${esc(COPY.customize)}</h2>
@@ -189,20 +159,9 @@ export function createShell(pond) {
       <label class="row stack"><span class="row-label">Title</span>
         <textarea id="title-field" rows="2" maxlength="80" spellcheck="false" data-set="title" placeholder="${esc(COPY.title.replace('\n', ' '))}">${esc(titleEl.textContent)}</textarea>
       </label>
-      <div class="row"><span class="row-label">Ducks</span>
-        <div class="counter inline" role="group" aria-label="Number of ducks">
-          <button type="button" class="step" data-act="add-duck" aria-label="Add a duck">${ICON.plus}</button>
-          <output class="count"></output>
-          <button type="button" class="step" data-act="remove-duck" aria-label="Remove a duck">${ICON.minus}</button>
-        </div>
-      </div>
-      <div class="row"><span class="row-label">Swimming pace</span>${seg('speed', SPEEDS, state.speed)}</div>
-      <div class="row"><span class="row-label">Water</span>${seg('calm', [['Lively', false], ['Calm', true]], state.calm)}</div>
-      <div class="row"><span class="row-label">Light</span>${seg('light', LIGHTS, state.light)}</div>
       <label class="row"><span class="row-label">Music</span>
         <input type="range" min="0" max="1.6" step="0.05" value="${state.music}" data-set="music" aria-label="Music volume">
       </label>
-      <div class="row"><span class="row-label">Quacks, pops and splashes</span>${seg('sfx', [['On', true], ['Off', false]], state.sfx)}</div>
     </div>
     <button type="button" class="text-btn" data-act="reset">Reset to how it started</button>
     </div>`;
@@ -217,12 +176,11 @@ export function createShell(pond) {
     panel.innerHTML = customHtml();
     // replay the short entrance so opening reads as a change
     panel.classList.remove('in'); void panel.offsetWidth; panel.classList.add('in');
-    syncCount();
     if (focus) panel.focus({ preventScroll: true });
   };
 
   const reset = () => {
-    resetTitle(); setSpeed(1); setLight('noon'); state.music = 1; state.sfx = true; applyAudio(); setCalm(false);
+    resetTitle(); state.music = 1; applyAudio();
     open(true, false);
   };
 
@@ -241,11 +199,7 @@ export function createShell(pond) {
     reset,
   };
   const SETTERS = {
-    speed: (v) => setSpeed(+v),
-    calm: (v) => setCalm(v === 'true'),
-    light: setLight,
     title: setTitle,
-    sfx: (v) => { state.sfx = v === 'true'; applyAudio(); },
     music: (v) => { state.music = +v; applyAudio(); },
   };
 
@@ -255,10 +209,6 @@ export function createShell(pond) {
     if (!el || el.disabled) return;
     pond.audio?.unlock();
     if (el.dataset.act) ACTS[el.dataset.act]?.();
-    else if (el.dataset.set) {
-      SETTERS[el.dataset.set](el.dataset.val);
-      el.parentElement.querySelectorAll('[role="radio"]').forEach((b) => b.setAttribute('aria-checked', String(b === el)));
-    }
   });
   root.addEventListener('input', (e) => {
     const el = e.target;
@@ -272,7 +222,6 @@ export function createShell(pond) {
 
   if (!document.documentElement.requestFullscreen) $('[data-act="full"]').hidden = true;
   if (!pond.assets.duck.model) $$('.counter').forEach((c) => { c.hidden = true; });
-  setLight('noon');
   open(false, false);
   syncCount();
   requestAnimationFrame(() => root.classList.add('ready'));

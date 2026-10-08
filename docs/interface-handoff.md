@@ -39,6 +39,8 @@ Không file nào khác của ao bị đụng: `scene.js`, `water.js`, `ducks.js`
 
 ## 4. Bố cục (theo ảnh tham chiếu của bạn)
 
+> **Cập nhật 2026-10-08:** bố cục đổi theo ảnh mẫu thứ hai — 5 nút công cụ thành hàng ngang giữa trên (tooltip bên dưới; ≤ 640 px xuống hàng hai), Customize sang góc trên phải (bảng thả xuống canh phải), bộ đếm thành viên dọc `+` trên `−` dưới, bỏ chữ "Duck". Bảng dưới là bản lúc bàn giao.
+
 | Vị trí | Thành phần | Class |
 |---|---|---|
 | Trên trái | Ảnh cá 40×40, bo 9px | `.mark` |
@@ -83,6 +85,8 @@ Không file nào khác của ao bị đụng: `scene.js`, `water.js`, `ducks.js`
 **Bộ đếm vịt `+ Duck −`** — `pond.addDuck()` / `pond.removeDuck()`; `pond.onDuckCount` gọi `syncCount` để mờ nút khi chạm 1 con hoặc tối đa. Nhãn "Duck" tĩnh; số con chỉ hiện trong Customize. **Ẩn ở màn ≤640px** (trên điện thoại thêm/bớt vịt trong Customize).
 
 **Bảng Customize** (dựng lại mỗi lần mở, từ `state`)
+
+> **Cập nhật 2026-10-08 (sau khi đưa về repo):** chủ dự án bỏ năm dòng Ducks, Swimming pace, Water, Light, Quacks/pops — Customize chỉ còn Title, Music, Reset; lớp `.pond-tint`, CSS `.seg` và `.counter.inline` cũng gỡ. Điện thoại (≤ 640 px, bộ đếm góc dưới phải bị ẩn) không còn chỗ thêm/bớt vịt. Bảng dưới là bản lúc bàn giao.
 
 | Dòng | `data-set` | Cách làm |
 |---|---|---|

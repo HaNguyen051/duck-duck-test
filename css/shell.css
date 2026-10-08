@@ -1,6 +1,6 @@
 /* Interface layer over the pond (js/pond/shell.js). The pond stays full-bleed underneath; everything here floats.
-   Layout (from the owner's reference, 2026-10-07): fish picture top left, Customize pill top centre, a column of
-   round tools top right, title and subtitle bottom left, "+ Duck −" bottom right.
+   Layout (from the owner's reference, 2026-10-07; rearranged 2026-10-08): fish picture top left, a row of round
+   tools top centre, Customize pill top right, title and subtitle bottom left, an upright + / − pill bottom right.
    All controls share one look: flat, frosted grey, white type. */
 @font-face {
   font-family: 'Bootzy';
@@ -23,7 +23,7 @@
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-l: env(safe-area-inset-left, 0px);
   --safe-r: env(safe-area-inset-right, 0px);
-  /* one size for the subtitle and the button labels (Customize, Duck): 18px at 1440px wide, scales with the window */
+  /* one size for the subtitle and the Customize label: 18px at 1440px wide, scales with the window */
   --text: clamp(14px, 1.26vw, 20px);
   --blur: blur(14px) saturate(1.15);
 }
@@ -45,7 +45,7 @@
 .shell [hidden] { display: none !important; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-/* ---------- top bar: fish picture left, Customize centre ---------- */
+/* ---------- top bar: fish picture left, Customize right (the tool row sits between them, centred) ---------- */
 .bar {
   position: absolute;
   top: calc(var(--pad) + var(--safe-t));
@@ -58,6 +58,7 @@
 }
 .bar > * { pointer-events: auto; }
 .mark { justify-self: start; width: 40px; height: 40px; border-radius: 9px; object-fit: cover; pointer-events: none; }
+.bar [data-act="customize"] { grid-column: 3; justify-self: end; }
 .pill-btn {
   display: inline-flex;
   align-items: center;
@@ -74,18 +75,18 @@
   white-space: nowrap;
   transition: background .2s ease, transform .15s ease;
 }
-.shell .pill-btn { font-size: var(--text); } /* same size as the subtitle and the Duck label */
+.shell .pill-btn { font-size: var(--text); } /* same size as the subtitle */
 .pill-btn:hover { background: var(--frost-strong); }
 .pill-btn:active { transform: scale(.97); }
 .shell .pill-btn[aria-expanded="true"] { background: var(--white); color: var(--on-white); }
 
-/* ---------- tools: a column of plain round buttons, top right ---------- */
+/* ---------- tools: a row of plain round buttons, top centre ---------- */
 .rail {
   position: absolute;
-  right: calc(var(--pad) + var(--safe-r));
   top: calc(var(--pad) + var(--safe-t));
+  left: 50%;
+  translate: -50% 0;
   display: flex;
-  flex-direction: column;
   gap: 16px;
 }
 .tool {
@@ -110,9 +111,9 @@
 .tool[data-tip]::after {
   content: attr(data-tip);
   position: absolute;
-  right: calc(100% + 10px);
-  top: 50%;
-  transform: translate(4px, -50%);
+  top: calc(100% + 10px); /* below the button: the row sits along the top edge */
+  left: 50%;
+  transform: translate(-50%, -4px);
   padding: 5px 10px;
   border-radius: 8px;
   background: var(--frost-strong);
@@ -124,7 +125,7 @@
   transition: opacity .15s ease, transform .15s ease;
 }
 @media (hover: hover) {
-  .tool[data-tip]:hover::after, .tool[data-tip]:focus-visible::after { opacity: 1; transform: translate(0, -50%); }
+  .tool[data-tip]:hover::after, .tool[data-tip]:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
 }
 
 /* ---------- title and subtitle, bottom left ----------
@@ -149,17 +150,16 @@
 }
 .hero-sub {
   margin: clamp(12px, 1.5vw, 22px) 0 0;
-  max-width: min(46ch, calc(100% - 230px)); /* stops short of the duck counter */
+  max-width: min(46ch, calc(100% - 90px)); /* stops short of the duck counter */
   font: 400 var(--text)/1.22 var(--ui);
   text-shadow: 0 1px 12px rgba(2, 40, 52, .35);
 }
 
-/* ---------- Customize panel: drops from the Customize button ---------- */
+/* ---------- Customize panel: drops from the Customize button, right-aligned under it ---------- */
 .panel {
   position: absolute;
   top: calc(var(--pad) + var(--safe-t) + 48px);
-  left: 50%;
-  translate: -50% 0;
+  right: calc(var(--pad) + var(--safe-r));
   width: min(380px, calc(100vw - 2 * var(--pad)));
   max-height: calc(100% - 2 * var(--pad) - 60px - var(--safe-t) - var(--safe-b));
   display: flex;
@@ -210,24 +210,21 @@
   color: var(--white);
 }
 .row textarea::placeholder { color: var(--white-2); }
-.seg { display: flex; padding: 3px; border-radius: 999px; background: var(--well); }
-.seg button { padding: 5px 12px; border: 0; border-radius: 999px; background: none; font-size: 14px; color: var(--white-2); transition: background .2s ease, color .2s ease; }
-.shell .seg button[aria-checked="true"] { background: var(--white); color: var(--on-white); }
 .row input[type="range"] { flex: 1 1 150px; max-width: 180px; height: 24px; accent-color: var(--white); cursor: pointer; }
 .shell .text-btn { margin-top: 10px; padding: 6px 0; border: 0; background: none; font-size: 14px; text-decoration: underline; text-underline-offset: 3px; color: var(--white-2); }
 .shell .text-btn:hover { color: var(--white); }
 
-/* ---------- duck counter: an outlined pill, bottom right: + Duck − ---------- */
+/* ---------- duck counter: an upright outlined pill, bottom right, + above − ---------- */
 .counter { display: inline-flex; align-items: center; border-radius: 999px; }
 .shell > .counter {
   position: absolute;
   right: calc(var(--pad) + var(--safe-r));
   bottom: calc(var(--pad) + var(--safe-b));
+  flex-direction: column;
   gap: 10px;
-  padding: 9px 12px;
+  padding: 9px;
   border: 1.5px solid var(--white);
 }
-.counter.inline { gap: 2px; padding: 3px; background: var(--well); }
 .step {
   width: 36px;
   height: 36px;
@@ -242,12 +239,9 @@
   transition: transform .15s ease, opacity .2s ease, background .2s ease;
 }
 .step svg { width: 16px; height: 16px; }
-.counter.inline .step { width: 30px; height: 30px; -webkit-backdrop-filter: none; backdrop-filter: none; }
 .step:hover:not(:disabled) { transform: scale(1.08); background: var(--frost-strong); }
 .step:active:not(:disabled) { transform: scale(.92); }
 .step:disabled { opacity: .4; cursor: default; }
-.count-label { min-width: 62px; text-align: center; font-size: var(--text); }
-.counter.inline .count { min-width: 34px; text-align: center; font-weight: 500; font-variant-numeric: tabular-nums; }
 
 /* ---------- hidden interface ---------- */
 .restore { position: absolute; left: calc(var(--pad) + var(--safe-l)); bottom: calc(var(--pad) + var(--safe-b)); }
@@ -255,23 +249,15 @@
 body:not(.ui-hidden) .restore { opacity: 0; visibility: hidden; pointer-events: none; }
 body.ui-hidden .shell > :not(.restore) { opacity: 0; visibility: hidden; pointer-events: none; }
 
-/* ---------- light: a tint over the canvas only ---------- */
-.pond-tint { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 1.2s ease; }
-.pond-tint::before, .pond-tint::after { content: ''; position: absolute; inset: 0; }
-body[data-light="gold"] .pond-tint, body[data-light="dusk"] .pond-tint { opacity: 1; }
-body[data-light="gold"] .pond-tint::before { background: linear-gradient(200deg, #ffb347 0%, #ff8a3d 45%, #b24a1e 100%); mix-blend-mode: soft-light; opacity: .85; }
-body[data-light="gold"] .pond-tint::after { background: radial-gradient(120% 90% at 85% 0%, rgba(255, 196, 110, .5), transparent 60%); mix-blend-mode: screen; }
-body[data-light="dusk"] .pond-tint::before { background: linear-gradient(180deg, #4a3f8f 0%, #1f2f6e 50%, #081a3c 100%); mix-blend-mode: multiply; opacity: .5; }
-body[data-light="dusk"] .pond-tint::after { background: radial-gradient(90% 70% at 50% 15%, rgba(255, 170, 190, .35), transparent 65%); mix-blend-mode: screen; }
-
 /* no scene (file://, no WebGL): nothing to control */
 body.nogl .shell { display: none; }
 
 /* ---------- phone: panel becomes a bottom sheet, title steps aside for it ---------- */
 @media (max-width: 640px) {
-  .rail { gap: 12px; }
+  /* the centred tool row would run into Customize on a narrow screen: it drops to a second row */
+  .rail { gap: 12px; top: calc(var(--pad) + var(--safe-t) + 48px); }
   .tool[data-tip]::after { display: none; }
-  .shell > .counter { display: none; } /* no + Duck − on small screens; the count is still in Customize */
+  .shell > .counter { display: none; } /* no + / − on small screens: phones keep the starting number of ducks (Customize has no counter since 2026-10-08) */
   .hero-sub { max-width: none; }
   .hero h1 { font-size: clamp(40px, 13.5vw, 72px); } /* phones: sized to the narrow screen instead */
   .panel {
@@ -291,10 +277,9 @@ body.nogl .shell { display: none; }
 /* short landscape windows */
 @media (max-height: 520px) and (min-width: 641px) {
   .hero-sub { display: none; }
-  .rail { flex-direction: row; }
   .tool[data-tip]::after { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .shell, .shell > *, .panel.in, .pond-tint { transition-duration: .01s; animation: none; }
+  .shell, .shell > *, .panel.in { transition-duration: .01s; animation: none; }
 }
