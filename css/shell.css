@@ -179,7 +179,11 @@ body.nogl .shell { display: none; }
 @media (max-width: 640px) {
   .rail { gap: 12px; }
   .tool[data-tip]::after { display: none; }
-  .shell > .counter { display: none; } /* no + / − on small screens: phones keep the starting number of ducks */
+  /* + / − stays on phones too (2026-10-09): a slimmer pill with thumb-sized buttons, and the title/subtitle keep
+     clear of it on the right instead of running underneath */
+  .shell > .counter { gap: 8px; padding: 7px; }
+  .step { width: 42px; height: 42px; }
+  .hero { right: calc(var(--pad) + var(--safe-r) + 66px); }
   .hero-sub { max-width: none; }
   .hero h1 { font-size: clamp(40px, 13.5vw, 72px); } /* phones: sized to the narrow screen instead */
 }
